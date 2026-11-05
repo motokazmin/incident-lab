@@ -1,0 +1,21 @@
+#!/bin/sh
+# Шаг сборки образа сюжета: раскладывает /tmp/image, готовит базу, прогревает кэш сборки.
+set -e
+cd /tmp/image
+. ./service.env
+mkdir -p /etc/lab/actions
+cp service.env boot /etc/lab/
+[ ! -d actions ] || cp actions/* /etc/lab/actions/
+chmod +x /etc/lab/boot /etc/lab/actions/*
+[ ! -f postgresql.lab.conf ] || cat postgresql.lab.conf >> /var/lib/postgresql/data/postgresql.conf
+if [ -f schema.sql ]; then
+  su postgres -c "pg_ctl -D /var/lib/postgresql/data -w start" >/dev/null
+  psql -U postgres -c "CREATE ROLE $DB LOGIN" -c "CREATE DATABASE $DB OWNER $DB"
+  psql -U "$DB" -d "$DB" -q -f schema.sql
+  su postgres -c "pg_ctl -D /var/lib/postgresql/data -w -m fast stop" >/dev/null
+fi
+# Сети в песочнице нет, а пересборка должна занимать секунды.
+cd /srv/app
+mkdir -p bin
+GOFLAGS=-mod=vendor go build -o "bin/$SERVICE" .
+rm -rf /tmp/image

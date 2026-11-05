@@ -1,0 +1,5 @@
+#!/bin/sh
+# Поднимает PostgreSQL при старте стенда. Вызывается из boot сюжета.
+install -o postgres -g postgres -m 0640 /dev/null /var/log/postgresql.log
+su postgres -c "pg_ctl -D /var/lib/postgresql/data -w -l /var/log/postgresql.log start" >/dev/null \
+  || { tail -n 20 /var/log/postgresql.log; exit 1; }

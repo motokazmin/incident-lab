@@ -26,6 +26,7 @@ import (
 
 const (
 	bootScript = "/etc/lab/boot"
+	bootLog    = "/var/log/lab-boot.log"
 	actionsDir = "/etc/lab/actions"
 	workDir    = "/srv/app"
 	targetAddr = "127.0.0.1:8080"
@@ -37,10 +38,8 @@ func main() {
 	var ready atomic.Bool
 	var bootErr atomic.Value
 	go func() {
-		out, err := exec.Command(bootScript).CombinedOutput()
-		os.WriteFile("/var/log/lab-boot.log", out, 0o644)
-		if err != nil {
-			bootErr.Store(err.Error() + ": " + string(out))
+		if err := runBoot(bootScript, bootLog); err != nil {
+			bootErr.Store(err.Error())
 			return
 		}
 		ready.Store(true)
@@ -71,6 +70,23 @@ func main() {
 		log.Fatal(err)
 	}
 	log.Fatal(http.Serve(l, mux))
+}
+
+// runBoot запускает скрипт сюжета с выводом в файл. Через канал нельзя: фоновый демон,
+// оставшийся без перенаправления, держал бы его открытым, и запуск не закончился бы.
+func runBoot(script, logPath string) error {
+	f, err := os.Create(logPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	cmd := exec.Command(script)
+	cmd.Stdout, cmd.Stderr = f, f
+	if err := cmd.Run(); err != nil {
+		out, _ := os.ReadFile(logPath)
+		return fmt.Errorf("%w: %s", err, out)
+	}
+	return nil
 }
 
 func serve(port uint32, h func(net.Conn)) {

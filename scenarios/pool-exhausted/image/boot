@@ -1,11 +1,5 @@
 #!/bin/sh
 # Запускается агентом при старте песочницы. Завершается, когда сервис отвечает.
 set -e
-install -o postgres -g postgres -m 0640 /dev/null /var/log/postgresql.log
-su postgres -c "pg_ctl -D /var/lib/postgresql/data -w -l /var/log/postgresql.log start" >/dev/null || { tail -n 20 /var/log/postgresql.log; exit 1; }
-setsid sh -c 'while :; do /srv/app/bin/shop >>/var/log/shop.log 2>&1; sleep 0.2; done' </dev/null >/dev/null 2>&1 &
-i=0
-until curl -fsS -o /dev/null http://127.0.0.1:8080/products/1; do
-    i=$((i+1)); [ $i -gt 100 ] && exit 1
-    sleep 0.1
-done
+lab-pg-start
+lab-service-start

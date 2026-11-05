@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 ctx=$(mktemp -d); trap 'rm -rf "$ctx"' EXIT
 # Без отметок о коммите и путях: иначе каждый коммит менял бы агент, а с ним все образы.
 CGO_ENABLED=0 go build -buildvcs=false -trimpath -o "$ctx/labagent" ./platform/cmd/labagent
-cp platform/guest/lab-init platform/guest/base.Dockerfile "$ctx/"
+cp -r platform/guest/. "$ctx/"
 docker build -q -t lab-base -f "$ctx/base.Dockerfile" "$ctx" >/dev/null
 
 [ $# -gt 0 ] || set -- $(cd scenarios && ls -d */ | tr -d /)

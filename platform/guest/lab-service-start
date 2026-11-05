@@ -1,0 +1,9 @@
+#!/bin/sh
+# Запускает учебный сервис под супервизором и ждёт ответа. Вызывается из boot сюжета.
+. /etc/lab/service.env
+setsid sh -c "while :; do /srv/app/bin/$SERVICE >>/var/log/$SERVICE.log 2>&1; sleep 0.2; done" </dev/null >/dev/null 2>&1 &
+i=0
+until curl -fsS -o /dev/null "http://127.0.0.1:8080$PROBE"; do
+    i=$((i+1)); [ $i -gt 100 ] && exit 1
+    sleep 0.1
+done
