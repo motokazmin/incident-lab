@@ -61,7 +61,6 @@ func New() scenario.Scenario {
 		Title:    "Сайт магазина висит",
 		Summary:  "Сервис заказов работал спокойно, но клиенты начали жаловаться, что сайт не отвечает. Найди причину в живой системе и исправь код так, чтобы сбой не вернулся.",
 		Stack:    "Go, PostgreSQL, терминал · на задачу до 90 минут",
-		Image:    "pool-exhausted",
 		Briefing: briefing,
 		Debrief:  debrief,
 		Hints:    hints,

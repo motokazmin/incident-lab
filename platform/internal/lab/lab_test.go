@@ -92,7 +92,7 @@ func (p *fakeProvider) Create(context.Context, string) (ports.Sandbox, error) {
 }
 
 func testScenario(check scenario.Check) scenario.Scenario {
-	return scenario.Scenario{ID: "s", Image: "s", Debrief: "разбор", Checks: []scenario.Check{check},
+	return scenario.Scenario{ID: "s", Debrief: "разбор", Checks: []scenario.Check{check},
 		Load: scenario.LoadProfile{RatePerSec: 100, Requests: []scenario.Request{{Weight: 1, Method: "GET", Path: "/"}}}}
 }
 

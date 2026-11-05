@@ -8,7 +8,7 @@
 ## Команды
 
 - `scripts/setup-firecracker.sh` — скачать Firecracker и гостевое ядро в `.data/fc` со сверкой контрольной суммы.
-- `scripts/build-images.sh` — собрать агент, образы и диски в `.data/images`. Нужен Docker.
+- `scripts/build-images.sh [id ...]` — собрать агент, образы и диски в `.data/images`; без аргументов все сюжеты, неизменившийся диск не пересобирается. Нужен Docker.
 - `go test ./...` — быстрые тесты. `go test -tags e2e ./platform/internal/lab/ -timeout 15m` — настоящие виртуалки, нужен `/dev/kvm`.
 - `(cd web && npm ci && npm run build)`, затем `go run ./platform/cmd/server` — http://127.0.0.1:8090.
 

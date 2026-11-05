@@ -73,12 +73,12 @@ type Check struct {
 }
 
 // Scenario — декларация инцидента. Сценарий не знает, как устроена песочница.
+// ID равен имени папки и образа, см. ADR 0005.
 type Scenario struct {
 	ID       string
 	Title    string // симптом глазами дежурного: диагноз название не выдаёт
 	Summary  string // что случилось и что нужно сделать, для списка задач
 	Stack    string // чем придётся пользоваться и сколько это займёт
-	Image    string
 	Briefing string
 	Debrief  string
 	Hints    []Hint // открываются строго по порядку

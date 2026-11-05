@@ -235,7 +235,7 @@ func (m *Manager) run(ctx context.Context, l *Lab) {
 func (l *Lab) boot(ctx context.Context, p ports.SandboxProvider) error {
 	ctx, cancel := context.WithTimeout(ctx, bootTimeout)
 	defer cancel()
-	box, err := p.Create(ctx, l.sc.Image)
+	box, err := p.Create(ctx, l.sc.ID)
 	if err != nil {
 		return err
 	}

@@ -3,7 +3,7 @@ package scenarios
 
 import (
 	"incident-lab/platform/scenario"
-	poolexhausted "incident-lab/scenarios/poolexhausted"
+	poolexhausted "incident-lab/scenarios/pool-exhausted"
 )
 
 // All возвращает все сюжеты.
