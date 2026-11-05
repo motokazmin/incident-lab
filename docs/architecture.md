@@ -5,16 +5,35 @@
 ## Зоны
 
 - **Каркас, `platform/`** (меняется редко): шлюз, стенды, песочницы, нагрузка, проверяющий, агент в госте.
-- **Прикладной код, `scenarios/`** (меняется часто): сценарии инцидентов. Каждый — Go-пакет с декларацией и проверками плюс образ и учебный сервис. Сервис — отдельный Go-модуль с `vendor`, сети в песочнице нет.
+- **Прикладной код, `scenarios/`** (меняется часто): сюжеты инцидентов и их список `scenarios.All()`. Сюжет — папка, см. ниже. Сервис — отдельный Go-модуль с `vendor`, сети в песочнице нет.
 - **Веб, `web/`:** TypeScript, Vite, xterm.js, Monaco. Графики — свой SVG.
 
-Сценарий называет образ, нагрузку и проверки. Лимиты и жизненный цикл у каркаса.
+Сюжет задаёт нагрузку, алерт, проверки и тексты. Лимиты и жизненный цикл у каркаса.
+
+## Папка сюжета
+
+Новый сюжет — папка `scenarios/<id>/` и строка в `scenarios.All()`, см. [ADR 0005](adr/0005-scenario-is-a-folder.md).
+
+```text
+scenarios/<id>/
+  scenario.go             декларация: ID, тексты, алерт, нагрузка
+  checks.go               проверки починки
+  repairs.go              верные и ложные починки для e2e
+  reference.go            эталонный путь, команды из подсказок
+  briefing.md debrief.md hints.md
+  image/  Dockerfile boot service.env schema.sql postgresql.lab.conf actions/
+  service/                учебный сервис с vendor
+```
+
+Общая обвязка лежит в `platform/guest` и попадает в базовый образ: `svc`, `lab-pg-start`, `lab-service-start`, `lab-setup`, действие `restart-service`. Вход стенда всегда `127.0.0.1:8080`, код всегда в `/srv/app`.
+
+Сборка: `scripts/build-images.sh [id]`. Проверка: `TestContract` без виртуалок, `go test -tags e2e ./platform/internal/lab/ -run TestScenario/<id>` на настоящих.
 
 ## Основные сущности
 
 | Сущность | Где | Роль |
 |---|---|---|
-| Scenario | `platform/scenario` | Контракт: образ, профиль нагрузки, проверки, брифинг, подсказки, разбор |
+| Scenario | `platform/scenario` | Контракт: нагрузка, алерт, проверки, тексты, для тестов — починки и эталонный путь |
 | Env | `platform/scenario` | Всё, что разрешено проверке: запрос, нагрузка, именованное действие |
 | Manager, Lab | `platform/internal/lab` | Лимиты мест и времени, состояния стенда, алерт, лента событий |
 | Sandbox, SandboxProvider | `platform/internal/ports` | Узкие интерфейсы песочницы; единственный путь внутрь — `Dial` |
@@ -36,14 +55,14 @@
 
 ## Запуск стенда
 
-Firecracker → `/sbin/lab-init` (overlay на диск стенда) → `labagent` → `/etc/lab/boot` сценария → нагрузка → наблюдение за алертом. Агент завершился — виртуалка выключается, стенд заканчивается.
+Firecracker → `/sbin/lab-init` (overlay на диск стенда) → `labagent` → `/etc/lab/boot` сюжета (`lab-pg-start`, `lab-service-start`) → нагрузка → наблюдение за алертом. Агент завершился — виртуалка выключается, стенд заканчивается.
 
 ## Composition root
 
-`platform/cmd/server/main.go`: конфиг → провайдер песочниц → сценарии → менеджер стендов → шлюз. Других мест сборки зависимостей нет. Новый сценарий подключается одной строкой там же.
+`platform/cmd/server/main.go`: конфиг → провайдер песочниц → `scenarios.All()` → менеджер стендов → шлюз. Других мест сборки зависимостей нет.
 
 ## Граф зависимостей
 
-`cmd/server → gateway → lab → (verifier, load, agentclient) → (ports, agentproto, scenario)`; `cmd/server → sandbox/firecracker → ports`; `scenarios/* → scenario`.
+`cmd/server → gateway → lab → (verifier, load, agentclient) → (ports, agentproto, scenario)`; `cmd/server → sandbox/firecracker → ports`; `cmd/server → scenarios → scenarios/* → scenario`.
 
 `ports`, `agentproto`, `scenario` — leaf-пакеты, циклов нет. Отдельного пакета `api` нет: HTTP живёт в шлюзе, разделять пока нечего. Управляющая база не нужна: стенды одноразовые и живут в памяти сервера.

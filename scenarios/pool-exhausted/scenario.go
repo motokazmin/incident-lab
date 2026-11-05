@@ -15,6 +15,11 @@ var briefing string
 //go:embed debrief.md
 var debrief string
 
+// Идут от «куда смотреть» к готовой правке. Ранние не называют причину.
+//
+//go:embed hints.md
+var hintsText string
+
 const (
 	probeProduct = 7   // обычный товар для сверки остатка
 	probeOrders  = 5   // сколько заказов делает сверка
@@ -57,7 +62,7 @@ func New() scenario.Scenario {
 		Stack:    "Go, PostgreSQL, терминал · на задачу до 90 минут",
 		Briefing: briefing,
 		Debrief:  debrief,
-		Hints:    hints,
+		Hints:    scenario.ParseHints(hintsText),
 		FixHow: []string{
 			"Исправь код в редакторе и нажми «Сохранить файл».",
 			"Выполни `svc deploy` в терминале, иначе сервис останется на старом коде.",

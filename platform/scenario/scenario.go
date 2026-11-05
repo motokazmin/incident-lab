@@ -4,6 +4,7 @@ package scenario
 
 import (
 	"context"
+	"strings"
 	"time"
 )
 
@@ -64,6 +65,16 @@ type Result struct {
 type Hint struct {
 	Title string
 	Text  string
+}
+
+// ParseHints читает лестницу подсказок из markdown: заголовок «## » открывает ступень.
+func ParseHints(md string) []Hint {
+	var out []Hint
+	for _, part := range strings.Split("\n"+md, "\n## ")[1:] {
+		title, text, _ := strings.Cut(part, "\n")
+		out = append(out, Hint{Title: strings.TrimSpace(title), Text: strings.TrimSpace(text)})
+	}
+	return out
 }
 
 // Check — одна проверка починки.
