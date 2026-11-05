@@ -15,8 +15,7 @@ import (
 	"incident-lab/platform/internal/agentproto"
 	"incident-lab/platform/internal/lab"
 	"incident-lab/platform/internal/sandbox/firecracker"
-	"incident-lab/platform/scenario"
-	"incident-lab/scenarios/poolexhausted"
+	"incident-lab/scenarios"
 )
 
 // Запуск: go test -tags e2e ./platform/internal/lab/ -v -timeout 15m
@@ -40,7 +39,7 @@ func manager(t *testing.T) *lab.Manager {
 	if err != nil {
 		t.Skip(err)
 	}
-	return lab.NewManager(p, []scenario.Scenario{poolexhausted.New()}, lab.Limits{MaxLabs: 12, MaxLifetime: 10 * time.Minute, IdleTimeout: 5 * time.Minute})
+	return lab.NewManager(p, scenarios.All(), lab.Limits{MaxLabs: 12, MaxLifetime: 10 * time.Minute, IdleTimeout: 5 * time.Minute})
 }
 
 func waitState(t *testing.T, l *lab.Lab, d time.Duration, want ...string) lab.View {

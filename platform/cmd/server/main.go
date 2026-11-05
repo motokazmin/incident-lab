@@ -12,8 +12,7 @@ import (
 	"incident-lab/platform/internal/gateway"
 	"incident-lab/platform/internal/lab"
 	"incident-lab/platform/internal/sandbox/firecracker"
-	"incident-lab/platform/scenario"
-	"incident-lab/scenarios/poolexhausted"
+	"incident-lab/scenarios"
 )
 
 func main() {
@@ -27,7 +26,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	labs := lab.NewManager(provider, []scenario.Scenario{poolexhausted.New()}, lab.Limits{
+	labs := lab.NewManager(provider, scenarios.All(), lab.Limits{
 		MaxLabs:     2,
 		MaxLifetime: 90 * time.Minute,
 		IdleTimeout: 2 * time.Minute,
