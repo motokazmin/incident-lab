@@ -97,7 +97,13 @@ func checkSurge(ctx context.Context, env scenario.Env) scenario.Result {
 		return scenario.Result{Detail: detail, Hint: hintRestart}
 	}
 	if st.ErrorRate() > maxErrorRate {
-		return scenario.Result{Detail: detail}
+		// Ошибок при большом пуле бывает ровно у порога: подсказка не должна зависеть от того,
+		// на этой проверке случился провал или на следующей.
+		res := scenario.Result{Detail: detail}
+		if n, err := leakedTx(ctx, env); err == nil && n > 0 {
+			res.Hint = hintBigPool
+		}
+		return res
 	}
 	// Таймаут в базе рвёт зависшие транзакции и прячет утечку от всех остальных проверок.
 	after, err := sessionLosses(ctx, env)
@@ -110,14 +116,18 @@ func checkSurge(ctx context.Context, env scenario.Env) scenario.Result {
 	return scenario.Result{Pass: true, Detail: detail}
 }
 
-func checkNoLeak(ctx context.Context, env scenario.Env) scenario.Result {
+func leakedTx(ctx context.Context, env scenario.Env) (int, error) {
 	out, err := env.Action(ctx, "leaked-tx")
 	if err != nil {
-		return scenario.Result{Detail: "не удалось спросить базу"}
+		return 0, err
 	}
-	n, err := strconv.Atoi(strings.TrimSpace(out))
+	return strconv.Atoi(strings.TrimSpace(out))
+}
+
+func checkNoLeak(ctx context.Context, env scenario.Env) scenario.Result {
+	n, err := leakedTx(ctx, env)
 	if err != nil {
-		return scenario.Result{Detail: "непонятный ответ базы"}
+		return scenario.Result{Detail: "не удалось спросить базу"}
 	}
 	return scenario.Result{Pass: n == 0, Detail: fmt.Sprintf("зависших соединений: %d", n)}
 }
