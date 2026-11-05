@@ -35,11 +35,10 @@ const (
 )
 
 const (
-	bootTimeout  = 90 * time.Second
-	alertWindow  = 10 // секунд
-	alertMinRate = 0.2
-	maxResponse  = 64 << 10
-	maxEvents    = 500
+	bootTimeout = 90 * time.Second
+	alertWindow = 10 // секунд
+	maxResponse = 64 << 10
+	maxEvents   = 500
 )
 
 // ErrLimit — достигнут предел одновременных стендов.
@@ -87,6 +86,8 @@ type View struct {
 	Report   *verifier.Report `json:"report,omitempty"`
 	Hints    []Hint           `json:"hints"`
 	HintsAll int              `json:"hintsTotal"`
+	Alert    string           `json:"alertText"`
+	FixHow   []string         `json:"fixHow"`
 }
 
 // Lab — запущенный стенд.
@@ -264,13 +265,8 @@ func (l *Lab) startLoad(ctx context.Context, seed uint64, p scenario.LoadProfile
 
 // watch поднимает алерт по тому, что нагрузка видит снаружи.
 func (l *Lab) watch(now time.Time) {
-	samples := l.rec.Since(now.Unix()-alertWindow-1, now)
-	sent, failed := 0, 0
-	for _, s := range samples {
-		sent += s.Sent
-		failed += s.Failed
-	}
-	if sent == 0 || float64(failed)/float64(sent) < alertMinRate {
+	text := alertReason(l.sc.Alert, l.rec.Since(now.Unix()-alertWindow-1, now))
+	if text == "" {
 		return
 	}
 	l.mu.Lock()
@@ -280,8 +276,33 @@ func (l *Lab) watch(now time.Time) {
 	}
 	l.mu.Unlock()
 	if raise {
-		l.event("alert", fmt.Sprintf("АЛЕРТ: %d из %d запросов с ошибкой за %d с", failed, sent, alertWindow))
+		l.event("alert", text)
 	}
+}
+
+// alertReason возвращает запись для ленты, если сработал порог. Время ответа берётся
+// как медиана посекундных p95: одна медленная секунда не поднимает алерт.
+func alertReason(a scenario.Alert, samples []load.Sample) string {
+	sent, failed := 0, 0
+	p95 := make([]int, 0, len(samples))
+	for _, s := range samples {
+		sent += s.Sent
+		failed += s.Failed
+		if s.Sent > 0 {
+			p95 = append(p95, s.P95Ms)
+		}
+	}
+	if sent == 0 {
+		return ""
+	}
+	if a.MinErrorRate > 0 && float64(failed)/float64(sent) >= a.MinErrorRate {
+		return fmt.Sprintf("АЛЕРТ: %d из %d запросов с ошибкой за %d с", failed, sent, alertWindow)
+	}
+	sort.Ints(p95)
+	if mid := p95[len(p95)/2]; a.MaxP95 > 0 && time.Duration(mid)*time.Millisecond > a.MaxP95 {
+		return fmt.Sprintf("АЛЕРТ: время ответа %d мс за %d с", mid, alertWindow)
+	}
+	return ""
 }
 
 func (l *Lab) setState(s string) {
@@ -346,7 +367,7 @@ func (l *Lab) View() View {
 	defer l.mu.Unlock()
 	v := View{ID: l.id, Scenario: l.sc.ID, Title: l.sc.Title, Briefing: l.sc.Briefing, State: l.state,
 		Seed: l.seed, Created: l.created, Events: append([]Event{}, l.events...), Report: l.report,
-		Hints: []Hint{}, HintsAll: len(l.sc.Hints)}
+		Hints: []Hint{}, HintsAll: len(l.sc.Hints), Alert: l.sc.Alert.Text, FixHow: l.sc.FixHow}
 	for _, h := range l.sc.Hints[:l.hints] {
 		v.Hints = append(v.Hints, Hint{Title: h.Title, Text: h.Text})
 	}

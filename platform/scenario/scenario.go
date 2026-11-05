@@ -72,6 +72,14 @@ type Check struct {
 	Run  func(ctx context.Context, env Env) Result
 }
 
+// Alert говорит, когда начинается инцидент. Решает каркас по тому, что нагрузка
+// измерила снаружи: хватает любого из порогов, нулевой порог не отслеживается.
+type Alert struct {
+	MinErrorRate float64       // доля ошибок за окно наблюдения
+	MaxP95       time.Duration // типичное за окно время ответа
+	Text         string        // что объяснить дежурному, когда сбой начался
+}
+
 // Scenario — декларация инцидента. Сценарий не знает, как устроена песочница.
 // ID равен имени папки и образа, см. ADR 0005.
 type Scenario struct {
@@ -81,7 +89,9 @@ type Scenario struct {
 	Stack    string // чем придётся пользоваться и сколько это займёт
 	Briefing string
 	Debrief  string
-	Hints    []Hint // открываются строго по порядку
+	Hints    []Hint   // открываются строго по порядку
+	FixHow   []string // как применить правку, по шагу на строку
+	Alert    Alert
 	Load     LoadProfile
 	Checks   []Check
 }

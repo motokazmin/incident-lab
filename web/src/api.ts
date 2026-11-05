@@ -6,7 +6,7 @@ export interface LabView {
   id: string; scenario: string; title: string; briefing: string; debrief?: string;
   state: "booting" | "healthy" | "alert" | "verifying" | "resolved" | "ended";
   seed: string; created: string; events: Event[]; report?: Report;
-  hints: Hint[]; hintsTotal: number;
+  hints: Hint[]; hintsTotal: number; alertText: string; fixHow: string[];
 }
 export interface Sample { t: number; sent: number; failed: number; p50ms: number; p95ms: number }
 

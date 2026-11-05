@@ -64,7 +64,15 @@ func New() scenario.Scenario {
 		Briefing: briefing,
 		Debrief:  debrief,
 		Hints:    hints,
-		Load:     mix(10),
+		FixHow: []string{
+			"Исправь код в редакторе и нажми «Сохранить файл».",
+			"Выполни `svc deploy` в терминале, иначе сервис останется на старом коде.",
+		},
+		Alert: scenario.Alert{
+			MinErrorRate: 0.2,
+			Text:         "Больше 20% запросов клиентов заканчиваются ошибкой. Найди причину, начни с `svc logs` в терминале.",
+		},
+		Load: mix(10),
 		Checks: []scenario.Check{
 			{Name: "Сервис держит тройную нагрузку", Run: checkSurge},
 			{Name: "Заказы списывают остаток, а проданный товар не продаётся", Run: checkOrders},

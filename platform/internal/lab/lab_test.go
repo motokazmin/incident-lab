@@ -6,12 +6,14 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"incident-lab/platform/internal/agentproto"
+	"incident-lab/platform/internal/load"
 	"incident-lab/platform/internal/ports"
 	"incident-lab/platform/scenario"
 )
@@ -286,5 +288,32 @@ func TestHintsOpenInOrder(t *testing.T) {
 	waitFor(t, "resolved", state(l, StateResolved))
 	if err := l.OpenHint(3); !errors.Is(err, ErrBusy) {
 		t.Fatalf("подсказка после закрытия: %v", err)
+	}
+}
+
+func TestAlertReason(t *testing.T) {
+	second := func(sent, failed, p95 int) load.Sample { return load.Sample{Sent: sent, Failed: failed, P95Ms: p95} }
+	both := scenario.Alert{MinErrorRate: 0.2, MaxP95: 500 * time.Millisecond}
+	for _, c := range []struct {
+		name    string
+		alert   scenario.Alert
+		samples []load.Sample
+		want    string // часть записи, пусто — алерта нет
+	}{
+		{"тишина", both, []load.Sample{second(10, 0, 3), second(10, 0, 3)}, ""},
+		{"нет запросов", both, nil, ""},
+		{"ошибки", both, []load.Sample{second(10, 2, 3)}, "2 из 10"},
+		{"ошибки ниже порога", both, []load.Sample{second(10, 1, 3)}, ""},
+		{"медленно", both, []load.Sample{second(10, 0, 900), second(10, 0, 800), second(10, 0, 3)}, "800 мс"},
+		{"одна медленная секунда", both, []load.Sample{second(10, 0, 900), second(10, 0, 3), second(10, 0, 3)}, ""},
+		{"порог ошибок выключен", scenario.Alert{MaxP95: time.Second}, []load.Sample{second(10, 10, 3)}, ""},
+		{"порог времени выключен", scenario.Alert{MinErrorRate: 0.2}, []load.Sample{second(10, 0, 9000)}, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := alertReason(c.alert, c.samples)
+			if c.want == "" && got != "" || !strings.Contains(got, c.want) {
+				t.Fatalf("%q, ждали %q", got, c.want)
+			}
+		})
 	}
 }
