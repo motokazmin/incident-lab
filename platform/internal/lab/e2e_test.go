@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -26,9 +27,14 @@ func manager(t *testing.T) *lab.Manager {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Свой каталог: firecracker.New чистит его и иначе удалил бы живые стенды сервера.
+	runDir := data + "/run-e2e"
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	p, err := firecracker.New(firecracker.Config{
 		Binary: data + "/fc/firecracker", Kernel: data + "/fc/vmlinux", ImagesDir: data + "/images",
-		RunDir: data + "/run", VCPUs: 2, MemMiB: 1024, LabDiskMiB: 1024,
+		RunDir: runDir, VCPUs: 2, MemMiB: 1024, LabDiskMiB: 1024,
 		DiskBytesPerSec: 100 << 20, DiskOpsPerSec: 5000,
 	})
 	if err != nil {
