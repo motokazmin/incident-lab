@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"incident-lab/platform/internal/agentclient"
@@ -468,7 +469,9 @@ func (l *Lab) Verify() error {
 	l.event("verify", fmt.Sprintf("Проверка починки №%d начата", attempt))
 	go func() {
 		stop()
-		rep := verifier.Run(l.ctx, l.sc.Checks, &env{l: l, seed: l.seed + attempt})
+		e := &env{l: l, seed: l.seed + attempt}
+		rep := verifier.Run(l.ctx, l.sc.Checks, e)
+		rep.LoadFailed = int(e.failed.Load())
 		// Стенд остановили во время проверки: нагрузку не возвращаем, состояние не трогаем.
 		if l.ctx.Err() != nil {
 			return
@@ -503,8 +506,9 @@ func firstFailure(r verifier.Report) string {
 
 // env — среда проверки. Запросы идут через тот же канал, что и нагрузка.
 type env struct {
-	l    *Lab
-	seed uint64
+	l      *Lab
+	seed   uint64
+	failed atomic.Int64
 }
 
 func (e *env) Do(ctx context.Context, method, path, body string) (int, []byte, error) {
@@ -527,7 +531,9 @@ func (e *env) Do(ctx context.Context, method, path, body string) (int, []byte, e
 func (e *env) RunLoad(ctx context.Context, p scenario.LoadProfile, d time.Duration) (scenario.Stats, error) {
 	ctx, cancel := context.WithTimeout(ctx, d)
 	defer cancel()
-	return load.Run(ctx, e.l.rt, load.NewPlan(e.seed, p), p.RatePerSec, e.l.rec), nil
+	st := load.Run(ctx, e.l.rt, load.NewPlan(e.seed, p), p.RatePerSec, e.l.rec)
+	e.failed.Add(int64(st.Failed))
+	return st, nil
 }
 
 func (e *env) Action(ctx context.Context, name string) (string, error) {

@@ -19,9 +19,10 @@ type Item struct {
 
 // Report — итог проверки починки.
 type Report struct {
-	Passed   bool      `json:"passed"`
-	Items    []Item    `json:"items"`
-	Finished time.Time `json:"finished"`
+	Passed     bool      `json:"passed"`
+	LoadFailed int       `json:"-"` // неудачных запросов в нагрузке проверки: у верной починки их нет
+	Items      []Item    `json:"items"`
+	Finished   time.Time `json:"finished"`
 }
 
 // Timeout — верхняя граница одной проверки починки.

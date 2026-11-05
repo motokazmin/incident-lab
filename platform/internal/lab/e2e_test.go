@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"incident-lab/platform/internal/agentproto"
 	"incident-lab/platform/internal/lab"
 	"incident-lab/platform/internal/sandbox/firecracker"
+	"incident-lab/platform/scenario"
 	"incident-lab/scenarios"
 )
 
@@ -39,7 +41,7 @@ func manager(t *testing.T) *lab.Manager {
 	if err != nil {
 		t.Skip(err)
 	}
-	return lab.NewManager(p, scenarios.All(), lab.Limits{MaxLabs: 12, MaxLifetime: 10 * time.Minute, IdleTimeout: 5 * time.Minute})
+	return lab.NewManager(p, scenarios.All(), lab.Limits{MaxLabs: runtime.GOMAXPROCS(0) + 4, MaxLifetime: 10 * time.Minute, IdleTimeout: 5 * time.Minute})
 }
 
 func waitState(t *testing.T, l *lab.Lab, d time.Duration, want ...string) lab.View {
@@ -133,103 +135,76 @@ func verify(t *testing.T, l *lab.Lab) *lab.View {
 	return &v
 }
 
-const soldOut = "\tif stock < req.Qty {\n\t\twriteError(w, http.StatusConflict, \"sold out\")\n\t\treturn\n\t}\n"
-
-func TestRepairs(t *testing.T) {
-	m := manager(t)
-	cases := []struct {
-		name string
-		fix  func(t *testing.T, l *lab.Lab)
-		pass bool
-		fail string // на какой проверке должен быть провал
-		hint string // часть подсказки при провале, пусто — подсказки нет
-	}{
-		{"рестарт", func(t *testing.T, l *lab.Lab) { shell(t, l, "svc restart") }, false, "нагрузку", "Перезапуск"},
-		{"заглушка", func(t *testing.T, l *lab.Lab) {
-			patch(t, l, "main.go", `mux.HandleFunc("POST /orders", s.createOrder)`,
-				`mux.HandleFunc("POST /orders", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusCreated, map[string]any{"order_id": 1}) })`)
-			shell(t, l, "svc deploy")
-		}, false, "Заказы", ""},
-		{"большой пул", func(t *testing.T, l *lab.Lab) {
-			patch(t, l, "main.go", "maxOpenConns = 15", "maxOpenConns = 150")
-			shell(t, l, "sed -i 's/^max_connections = 25/max_connections = 200/' /var/lib/postgresql/data/postgresql.conf && su postgres -c 'pg_ctl -D /var/lib/postgresql/data -w restart -l /var/log/postgresql.log' >/dev/null && svc deploy")
-		}, false, "", "Больший пул"},
-		{"убрана проверка остатка", func(t *testing.T, l *lab.Lab) {
-			patch(t, l, "orders.go", soldOut, "\t_ = stock\n")
-			shell(t, l, "svc deploy")
-		}, false, "", ""},
-		// Утечка осталась в коде, спрятана от запросов проверки.
-		{"отсечка по id", func(t *testing.T, l *lab.Lab) {
-			patch(t, l, "orders.go", "\ttx, err := s.db.Begin()\n", "\tif req.ProductID >= 198 {\n\t\twriteError(w, http.StatusConflict, \"sold out\")\n\t\treturn\n\t}\n\ttx, err := s.db.Begin()\n")
-			shell(t, l, "svc deploy")
-		}, false, "", ""},
-		// Честная ошибка новичка: остаток читается до транзакции, в гонке ветка с утечкой жива.
-		{"предпроверка", func(t *testing.T, l *lab.Lab) {
-			patch(t, l, "orders.go", "\ttx, err := s.db.Begin()\n", "\tvar have int\n\tif s.db.QueryRow(`SELECT stock FROM products WHERE id = $1`, req.ProductID).Scan(&have) == nil && have < req.Qty {\n\t\twriteError(w, http.StatusConflict, \"sold out\")\n\t\treturn\n\t}\n\ttx, err := s.db.Begin()\n")
-			shell(t, l, "svc deploy")
-		}, false, "", "до транзакции"},
-		// Пул без предела, сессии рубит база: слоты теряются, но не кончаются.
-		{"таймаут в базе", func(t *testing.T, l *lab.Lab) {
-			patch(t, l, "main.go", "db.SetMaxOpenConns(maxOpenConns)", "db.SetMaxOpenConns(0)")
-			shell(t, l, "echo \"idle_in_transaction_session_timeout = '10ms'\" >> /var/lib/postgresql/data/postgresql.conf && su postgres -c 'pg_ctl -D /var/lib/postgresql/data reload' >/dev/null && svc deploy")
-		}, false, "", "Таймаут"},
-		{"rollback", func(t *testing.T, l *lab.Lab) {
-			patch(t, l, "orders.go", "\t\twriteError(w, http.StatusConflict, \"sold out\")\n", "\t\ttx.Rollback()\n\t\twriteError(w, http.StatusConflict, \"sold out\")\n")
-			shell(t, l, "svc deploy")
-		}, true, "", ""},
-		{"defer rollback", func(t *testing.T, l *lab.Lab) {
-			patch(t, l, "orders.go", "\tvar stock int\n\terr = tx.QueryRow", "\tdefer tx.Rollback()\n\tvar stock int\n\terr = tx.QueryRow")
-			shell(t, l, "svc deploy")
-		}, true, "", ""},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			l, err := m.Start("pool-exhausted", 42)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { m.Stop(l.View().ID) })
-			waitState(t, l, time.Minute, lab.StateHealthy)
-			c.fix(t, l)
-			v := verify(t, l)
-			if v.Report.Passed != c.pass {
-				t.Fatalf("Passed=%v, ждали %v: %+v", v.Report.Passed, c.pass, v.Report)
-			}
-			if got := v.Report.Items[len(v.Report.Items)-1].Hint; c.hint == "" && got != "" || !strings.Contains(got, c.hint) {
-				t.Fatalf("подсказка %q, ждали %q", got, c.hint)
-			}
-			if c.fail != "" {
-				last := v.Report.Items[len(v.Report.Items)-1]
-				if last.Pass || !strings.Contains(last.Name+last.Detail, c.fail) {
-					t.Fatalf("провал не там: %+v", last)
-				}
-			}
-			// Верная починка не теряет ни одного запроса: иначе порог ошибок маскирует шум.
-			if c.pass && !strings.Contains(v.Report.Items[0].Detail, "ошибок 0.0%") {
-				t.Fatalf("на верной починке есть ошибки: %+v", v.Report.Items[0])
-			}
-			if c.pass && (v.State != lab.StateResolved || v.Debrief == "") {
-				t.Fatalf("нет разбора: %+v", v)
-			}
-		})
-	}
-}
-
-// Без починки стенд сам доходит до алерта, а проверка проваливается.
-func TestIncidentHappens(t *testing.T) {
-	m := manager(t)
-	l, err := m.Start("pool-exhausted", 42)
+func start(t *testing.T, m *lab.Manager, id string) *lab.Lab {
+	t.Helper()
+	l, err := m.Start(id, 42)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { m.Stop(l.View().ID) })
 	waitState(t, l, time.Minute, lab.StateHealthy)
-	start := time.Now()
-	waitState(t, l, 4*time.Minute, lab.StateAlert)
-	t.Logf("алерт через %s", time.Since(start).Round(time.Second))
-	if v := verify(t, l); v.Report.Passed {
-		t.Fatal("проверка прошла без починки")
+	return l
+}
+
+func runRepair(t *testing.T, l *lab.Lab, r scenario.Repair) {
+	t.Helper()
+	for _, e := range r.Edits {
+		patch(t, l, e.File, e.From, e.To)
+	}
+	if r.Shell != "" {
+		shell(t, l, r.Shell)
+	}
+}
+
+func checkOutcome(t *testing.T, v *lab.View, r scenario.Repair) {
+	t.Helper()
+	if v.Report.Passed != r.Pass {
+		t.Fatalf("Passed=%v, ждали %v: %+v", v.Report.Passed, r.Pass, v.Report)
+	}
+	last := v.Report.Items[len(v.Report.Items)-1]
+	if last.Hint != "" && r.Hint == "" || !strings.Contains(last.Hint, r.Hint) {
+		t.Fatalf("подсказка %q, ждали %q", last.Hint, r.Hint)
+	}
+	if r.FailAt != "" && (last.Pass || !strings.Contains(last.Name+last.Detail, r.FailAt)) {
+		t.Fatalf("провал не там: %+v", last)
+	}
+	if !r.Pass {
+		return
+	}
+	// Верная починка не теряет ни одного запроса: иначе порог ошибок маскирует шум.
+	if v.Report.LoadFailed != 0 {
+		t.Fatalf("на верной починке %d ошибок: %+v", v.Report.LoadFailed, v.Report.Items[0])
+	}
+	if v.State != lab.StateResolved || v.Debrief == "" {
+		t.Fatalf("нет разбора: %+v", v)
+	}
+}
+
+// TestScenario проверяет каждый сюжет на настоящих виртуалках: сбой случается сам,
+// верные починки проходят, ложные нет. Выбрать один: -run TestScenario/<id>.
+func TestScenario(t *testing.T) {
+	m := manager(t)
+	for _, sc := range scenarios.All() {
+		t.Run(sc.ID, func(t *testing.T) {
+			t.Run("без починки", func(t *testing.T) {
+				t.Parallel()
+				l := start(t, m, sc.ID)
+				begin := time.Now()
+				waitState(t, l, 4*time.Minute, lab.StateAlert)
+				t.Logf("алерт через %s", time.Since(begin).Round(time.Second))
+				if v := verify(t, l); v.Report.Passed {
+					t.Fatal("проверка прошла без починки")
+				}
+			})
+			for _, r := range sc.Repairs {
+				t.Run(r.Name, func(t *testing.T) {
+					t.Parallel()
+					l := start(t, m, sc.ID)
+					runRepair(t, l, r)
+					checkOutcome(t, verify(t, l), r)
+				})
+			}
+		})
 	}
 }
 
@@ -237,12 +212,7 @@ func TestIncidentHappens(t *testing.T) {
 // маска игнорируемых сигналов наследуется от PID 1 через агента.
 func TestTerminalSignals(t *testing.T) {
 	m := manager(t)
-	l, err := m.Start("pool-exhausted", 42)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { m.Stop(l.View().ID) })
-	waitState(t, l, time.Minute, lab.StateHealthy)
+	l := start(t, m, scenarios.All()[0].ID)
 
 	for _, c := range []struct {
 		name string
@@ -301,11 +271,6 @@ func TestTerminalSignals(t *testing.T) {
 // Осиротевшие процессы подбирает PID 1, зомби в стенде не копятся.
 func TestOrphansReaped(t *testing.T) {
 	m := manager(t)
-	l, err := m.Start("pool-exhausted", 42)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { m.Stop(l.View().ID) })
-	waitState(t, l, time.Minute, lab.StateHealthy)
+	l := start(t, m, scenarios.All()[0].ID)
 	shell(t, l, `(sleep 0.2 &) ; sleep 2; ! ps -eo stat | grep -q '^Z'`)
 }

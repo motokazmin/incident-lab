@@ -72,6 +72,22 @@ type Check struct {
 	Run  func(ctx context.Context, env Env) Result
 }
 
+// Edit — замена в файле учебного сервиса, путь от /srv/app.
+type Edit struct {
+	File, From, To string
+}
+
+// Repair — попытка починки, которую e2e выполняет на настоящем стенде. Ложные починки
+// доказывают, что проверку нельзя пройти, не устранив причину.
+type Repair struct {
+	Name   string
+	Edits  []Edit
+	Shell  string // команда в терминале после правок
+	Pass   bool   // должна ли починка пройти проверку
+	FailAt string // часть названия или детали проверки, на которой провал; пусто — любая
+	Hint   string // часть подсказки при провале; пусто — подсказки нет
+}
+
 // Alert говорит, когда начинается инцидент. Решает каркас по тому, что нагрузка
 // измерила снаружи: хватает любого из порогов, нулевой порог не отслеживается.
 type Alert struct {
@@ -94,4 +110,5 @@ type Scenario struct {
 	Alert    Alert
 	Load     LoadProfile
 	Checks   []Check
+	Repairs  []Repair // только для тестов, дежурному не показывается
 }
