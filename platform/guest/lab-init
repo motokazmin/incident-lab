@@ -1,0 +1,35 @@
+#!/bin/sh
+# PID 1 песочницы. Базовый диск только для чтения, запись уходит на диск стенда
+# через overlay. Дальше работает агент.
+export PATH=/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+mount -t devtmpfs dev /dev 2>/dev/null
+mount --bind / /.lab/lower || exec sh
+mount -t ext4 -o noatime /dev/vdb /.lab/disk || exec sh
+mkdir -p /.lab/disk/upper /.lab/disk/work /.lab/disk/merged
+mount -t overlay overlay \
+    -o lowerdir=/.lab/lower,upperdir=/.lab/disk/upper,workdir=/.lab/disk/work \
+    /.lab/disk/merged || exec sh
+
+cd /.lab/disk/merged
+mkdir -p oldroot
+pivot_root . oldroot
+cd /
+mount -t proc proc /proc
+mount -t sysfs sys /sys
+mount -t devtmpfs dev /dev
+mkdir -p /dev/pts /dev/shm
+mount -t devpts devpts /dev/pts -o gid=5,mode=620,ptmxmode=666
+mount -t tmpfs tmp /dev/shm
+mount -t tmpfs tmp /run
+mkdir -p /run/postgresql && chown postgres:postgres /run/postgresql
+umount -l /oldroot
+rmdir /oldroot
+hostname lab
+printf '127.0.0.1 localhost lab\n::1 localhost lab\n' > /etc/hosts
+ip link set lo up
+# Оболочка остаётся PID 1 и подбирает зомби. Без агента стенд бесполезен: выключаем машину.
+# Агент не фоновый: при & он унаследует игнорирование SIGINT, а с ним и весь терминал,
+# и Ctrl+C перестанет работать.
+/sbin/labagent </dev/null >/var/log/labagent.log 2>&1
+poweroff -f

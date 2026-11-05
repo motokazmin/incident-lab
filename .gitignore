@@ -1,0 +1,19 @@
+# Go
+/bin/
+*.test
+*.out
+# Node
+node_modules/
+dist/
+*.tsbuildinfo
+# Локальные данные и образы песочниц
+/.data/
+/images/
+*.ext4
+*.img
+vmlinux*
+# Секреты
+.env
+.env.*
+# Claude
+.claude/settings.local.json

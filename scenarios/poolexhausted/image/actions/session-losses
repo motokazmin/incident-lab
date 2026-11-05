@@ -1,0 +1,3 @@
+#!/bin/sh
+# Сколько сессий база оборвала сама или по команде за всё время.
+psql -U postgres -d shop -Atc "SELECT sessions_fatal + sessions_killed FROM pg_stat_database WHERE datname = 'shop'"

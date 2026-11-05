@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": ["Bash(go test:*)", "Bash(go build:*)", "Bash(go vet:*)", "Bash(npm test:*)", "Bash(npm run check:*)", "Bash(npm run build:*)"]
+  },
+  "hooks": {
+    "PreToolUse": [{"matcher": "Bash|Edit|Write|MultiEdit",
+      "hooks": [{"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/guard.py\""}]}],
+    "PostToolUse": [{"matcher": "Edit|Write|MultiEdit",
+      "hooks": [{"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/after-edit.py\""}]}]
+  }
+}
