@@ -66,8 +66,9 @@ func New() scenario.Scenario {
 			MinErrorRate: 0.2,
 			Text:         "Больше 20% запросов клиентов заканчиваются ошибкой. Найди причину, начни с `svc logs` в терминале.",
 		},
-		Load:    mix(10),
-		Repairs: repairs,
+		Load:      mix(10),
+		Repairs:   repairs,
+		Reference: reference,
 		Checks: []scenario.Check{
 			{Name: "Сервис держит тройную нагрузку", Run: checkSurge},
 			{Name: "Заказы списывают остаток, а проданный товар не продаётся", Run: checkOrders},

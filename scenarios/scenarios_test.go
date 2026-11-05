@@ -25,6 +25,7 @@ func TestContract(t *testing.T) {
 			checkAlert(t, sc.Alert)
 			checkChecks(t, sc)
 			checkRepairs(t, sc)
+			checkReference(t, sc)
 		})
 	}
 }
@@ -133,5 +134,23 @@ func checkEdits(t *testing.T, id string, r scenario.Repair) {
 			t.Errorf("починка %q: в %s нет %q", r.Name, e.File, e.From)
 		}
 		files[e.File] = strings.Replace(src, e.From, e.To, 1)
+	}
+}
+
+// checkReference требует, чтобы команды пути стояли в подсказках: e2e запускает их на
+// стенде, и команда из подсказки не устареет незаметно.
+func checkReference(t *testing.T, sc scenario.Scenario) {
+	t.Helper()
+	if len(sc.Reference) == 0 {
+		t.Error("нет эталонного пути")
+	}
+	all := ""
+	for _, h := range sc.Hints {
+		all += h.Text + "\n"
+	}
+	for _, s := range sc.Reference {
+		if s.Title == "" || s.Expect == "" || !strings.Contains(all, s.Cmd) || s.Cmd == "" {
+			t.Errorf("шаг %q неполон или его команды нет в подсказках: %+v", s.Title, s)
+		}
 	}
 }

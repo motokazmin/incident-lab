@@ -88,6 +88,14 @@ type Repair struct {
 	Hint   string // часть подсказки при провале; пусто — подсказки нет
 }
 
+// Step — шаг эталонного пути: команда из подсказки и то, что она должна показать на
+// стенде со сбоем. После шагов e2e применяет первую верную починку.
+type Step struct {
+	Title  string
+	Cmd    string
+	Expect string
+}
+
 // Alert говорит, когда начинается инцидент. Решает каркас по тому, что нагрузка
 // измерила снаружи: хватает любого из порогов, нулевой порог не отслеживается.
 type Alert struct {
@@ -99,16 +107,17 @@ type Alert struct {
 // Scenario — декларация инцидента. Сценарий не знает, как устроена песочница.
 // ID равен имени папки и образа, см. ADR 0005.
 type Scenario struct {
-	ID       string
-	Title    string // симптом глазами дежурного: диагноз название не выдаёт
-	Summary  string // что случилось и что нужно сделать, для списка задач
-	Stack    string // чем придётся пользоваться и сколько это займёт
-	Briefing string
-	Debrief  string
-	Hints    []Hint   // открываются строго по порядку
-	FixHow   []string // как применить правку, по шагу на строку
-	Alert    Alert
-	Load     LoadProfile
-	Checks   []Check
-	Repairs  []Repair // только для тестов, дежурному не показывается
+	ID        string
+	Title     string // симптом глазами дежурного: диагноз название не выдаёт
+	Summary   string // что случилось и что нужно сделать, для списка задач
+	Stack     string // чем придётся пользоваться и сколько это займёт
+	Briefing  string
+	Debrief   string
+	Hints     []Hint   // открываются строго по порядку
+	FixHow    []string // как применить правку, по шагу на строку
+	Alert     Alert
+	Load      LoadProfile
+	Checks    []Check
+	Repairs   []Repair // только для тестов, дежурному не показывается
+	Reference []Step   // путь от симптома к причине; закрывается как и Repairs
 }

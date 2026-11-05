@@ -5,6 +5,7 @@ package lab_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -63,7 +64,8 @@ func waitState(t *testing.T, l *lab.Lab, d time.Duration, want ...string) lab.Vi
 	return lab.View{}
 }
 
-func shell(t *testing.T, l *lab.Lab, cmd string) {
+// shell выполняет команду в терминале стенда и возвращает весь вывод с эхом.
+func shell(t *testing.T, l *lab.Lab, cmd string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
@@ -87,11 +89,7 @@ func shell(t *testing.T, l *lab.Lab, cmd string) {
 				return
 			}
 			out.Write(p)
-			if strings.Contains(out.String(), "END-OF-CMD-0") {
-				done <- ""
-				return
-			}
-			if strings.Contains(out.String(), "END-OF-CMD-1") || strings.Contains(out.String(), "END-OF-CMD-2") {
+			if strings.Contains(out.String(), "END-OF-CMD-") {
 				done <- out.String()
 				return
 			}
@@ -99,11 +97,23 @@ func shell(t *testing.T, l *lab.Lab, cmd string) {
 	}()
 	select {
 	case o := <-done:
-		if o != "" {
+		if !strings.Contains(o, "END-OF-CMD-0") {
 			t.Fatalf("команда %q упала:\n%s", cmd, o)
 		}
+		return o
 	case <-ctx.Done():
 		t.Fatalf("команда %q не завершилась", cmd)
+	}
+	return ""
+}
+
+// showStep выполняет команду так, как её запустил бы дежурный. Строка идёт в base64, чтобы
+// эхо не содержало ожидаемого текста, а timeout останавливает `svc logs`, как Ctrl+C.
+func showStep(t *testing.T, l *lab.Lab, s scenario.Step) {
+	t.Helper()
+	enc := base64.StdEncoding.EncodeToString([]byte(s.Cmd))
+	if out := shell(t, l, "echo "+enc+" | base64 -d | timeout 3 bash; true"); !strings.Contains(out, s.Expect) {
+		t.Fatalf("шаг %q: нет %q в выводе:\n%s", s.Title, s.Expect, out)
 	}
 }
 
@@ -132,6 +142,7 @@ func verify(t *testing.T, l *lab.Lab) *lab.View {
 	for _, i := range v.Report.Items {
 		t.Logf("  [%v] %s: %s", i.Pass, i.Name, i.Detail)
 	}
+	t.Logf("  ошибок нагрузки: %d", v.Report.LoadFailed)
 	return &v
 }
 
@@ -180,6 +191,15 @@ func checkOutcome(t *testing.T, v *lab.View, r scenario.Repair) {
 	}
 }
 
+func firstGood(list []scenario.Repair) scenario.Repair {
+	for _, r := range list {
+		if r.Pass {
+			return r
+		}
+	}
+	panic("контракт: нет верной починки")
+}
+
 // TestScenario проверяет каждый сюжет на настоящих виртуалках: сбой случается сам,
 // верные починки проходят, ложные нет. Выбрать один: -run TestScenario/<id>.
 func TestScenario(t *testing.T) {
@@ -195,6 +215,17 @@ func TestScenario(t *testing.T) {
 				if v := verify(t, l); v.Report.Passed {
 					t.Fatal("проверка прошла без починки")
 				}
+			})
+			t.Run("эталонный путь", func(t *testing.T) {
+				t.Parallel()
+				l := start(t, m, sc.ID)
+				waitState(t, l, 4*time.Minute, lab.StateAlert)
+				for _, s := range sc.Reference {
+					showStep(t, l, s)
+				}
+				fix := firstGood(sc.Repairs)
+				runRepair(t, l, fix)
+				checkOutcome(t, verify(t, l), fix)
 			})
 			for _, r := range sc.Repairs {
 				t.Run(r.Name, func(t *testing.T) {
