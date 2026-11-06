@@ -210,7 +210,7 @@ func (m *Manager) run(ctx context.Context, l *Lab) {
 	}
 	defer l.box.Close()
 	// Сначала нагрузка: в состоянии healthy проверка уже может её остановить.
-	l.startLoad(ctx, l.seed, l.sc.Load)
+	l.startLoad(ctx, l.seed, true)
 	l.setState(StateHealthy)
 	l.event("ready", "Сервис запущен, нагрузка пошла")
 
@@ -252,11 +252,22 @@ func (l *Lab) boot(ctx context.Context, p ports.SandboxProvider) error {
 	return nil
 }
 
-func (l *Lab) startLoad(ctx context.Context, seed uint64, p scenario.LoadProfile) {
+// startLoad гонит нагрузку сценария. С quiet её начало идёт тихой частью из Rise,
+// без него сразу поднятая нагрузка: после проверки инцидент не должен затихать.
+func (l *Lab) startLoad(ctx context.Context, seed uint64, quiet bool) {
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		p, r := l.sc.Load, l.sc.Rise
+		if r != nil {
+			if quiet {
+				calm, stop := context.WithTimeout(ctx, r.After)
+				load.Run(calm, l.rt, load.NewPlan(seed, p), p.RatePerSec, l.rec)
+				stop()
+			}
+			p = r.Load
+		}
 		load.Run(ctx, l.rt, load.NewPlan(seed, p), p.RatePerSec, l.rec)
 	}()
 	l.mu.Lock()
@@ -485,7 +496,7 @@ func (l *Lab) Verify() error {
 			}
 			text = "Проверка не пройдена: " + firstFailure(rep)
 		}
-		l.startLoad(l.ctx, l.seed+attempt, l.sc.Load)
+		l.startLoad(l.ctx, l.seed+attempt, false)
 		l.mu.Lock()
 		l.report = &rep
 		l.state = next
@@ -528,12 +539,14 @@ func (e *env) Do(ctx context.Context, method, path, body string) (int, []byte, e
 	return resp.StatusCode, data, err
 }
 
-func (e *env) RunLoad(ctx context.Context, p scenario.LoadProfile, d time.Duration) (scenario.Stats, error) {
-	ctx, cancel := context.WithTimeout(ctx, d)
+// RunLoad сообщает об ошибке, если бюджет проверки кончился раньше срока: укороченный
+// прогон иначе выглядел бы успешным.
+func (e *env) RunLoad(parent context.Context, p scenario.LoadProfile, d time.Duration) (scenario.Stats, error) {
+	ctx, cancel := context.WithTimeout(parent, d)
 	defer cancel()
 	st := load.Run(ctx, e.l.rt, load.NewPlan(e.seed, p), p.RatePerSec, e.l.rec)
 	e.failed.Add(int64(st.Failed))
-	return st, nil
+	return st, parent.Err()
 }
 
 func (e *env) Action(ctx context.Context, name string) (string, error) {

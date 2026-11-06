@@ -23,6 +23,7 @@ type fakeBox struct {
 	done     chan struct{}
 	once     sync.Once
 	requests atomic.Int64
+	raised   atomic.Int64 // запросы поднятой нагрузки
 	srv      map[uint32]*http.Server
 	ln       map[uint32]*memListener
 }
@@ -47,7 +48,12 @@ func newFakeBox() *fakeBox {
 	b := &fakeBox{done: make(chan struct{}), srv: map[uint32]*http.Server{}, ln: map[uint32]*memListener{}}
 	handlers := map[uint32]http.HandlerFunc{
 		agentproto.PortControl: func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) },
-		agentproto.PortService: func(w http.ResponseWriter, _ *http.Request) { b.requests.Add(1) },
+		agentproto.PortService: func(w http.ResponseWriter, r *http.Request) {
+			b.requests.Add(1)
+			if r.URL.Path == "/raised" {
+				b.raised.Add(1)
+			}
+		},
 	}
 	for port, h := range handlers {
 		l := &memListener{ch: make(chan net.Conn), done: b.done}
@@ -219,6 +225,56 @@ func TestVerifyResolvesAndShowsDebrief(t *testing.T) {
 	waitFor(t, "resolved", state(l, StateResolved))
 	if l.View().Debrief == "" {
 		t.Fatal("нет разбора")
+	}
+}
+
+func raisedScenario(after time.Duration) scenario.Scenario {
+	sc := testScenario(scenario.Check{Name: "c", Run: pass})
+	sc.Rise = &scenario.Rise{After: after, Load: scenario.LoadProfile{RatePerSec: 100,
+		Requests: []scenario.Request{{Weight: 1, Method: "GET", Path: "/raised"}}}}
+	return sc
+}
+
+func startRaised(t *testing.T, after time.Duration) (*Lab, *fakeBox) {
+	t.Helper()
+	p := &fakeProvider{}
+	m := NewManager(p, []scenario.Scenario{raisedScenario(after)}, Limits{MaxLabs: 1, MaxLifetime: time.Minute, IdleTimeout: time.Minute})
+	l, err := m.Start("s", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { m.Stop(l.View().ID) })
+	waitFor(t, "healthy", state(l, StateHealthy))
+	return l, p.boxes[0]
+}
+
+func TestRiseReplacesLoad(t *testing.T) {
+	_, b := startRaised(t, 50*time.Millisecond)
+	waitFor(t, "поднятая нагрузка", func() bool { return b.raised.Load() > 0 })
+}
+
+// После проверки нагрузка не затихает заново: иначе провал выглядел бы как улучшение.
+func TestVerifyResumesRaisedLoad(t *testing.T) {
+	l, b := startRaised(t, time.Hour)
+	waitFor(t, "тихая нагрузка", func() bool { return b.requests.Load() > 0 })
+	if b.raised.Load() != 0 {
+		t.Fatal("нагрузка поднялась раньше срока")
+	}
+	if err := l.Verify(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "поднятая нагрузка", func() bool { return b.raised.Load() > 0 })
+}
+
+// Кончившийся бюджет проверки — ошибка: укороченный прогон выглядел бы успехом.
+func TestRunLoadReportsExpiredBudget(t *testing.T) {
+	l, _ := startRaised(t, time.Hour)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	e := &env{l: l, seed: 1}
+	p := scenario.LoadProfile{RatePerSec: 10, Requests: []scenario.Request{{Weight: 1, Method: "GET", Path: "/"}}}
+	if _, err := e.RunLoad(ctx, p, time.Hour); err == nil {
+		t.Fatal("нет ошибки")
 	}
 }
 

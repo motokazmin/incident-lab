@@ -27,7 +27,9 @@ scenarios/<id>/
 
 Общая обвязка лежит в `platform/guest` и попадает в базовый образ: `svc`, `lab-pg-start`, `lab-service-start`, `lab-setup`, действие `restart-service`. Вход стенда всегда `127.0.0.1:8080`, код всегда в `/srv/app`.
 
-Сборка: `scripts/build-images.sh [id]`. Проверка: `TestContract` без виртуалок, `go test -tags e2e ./platform/internal/lab/ -run TestScenario/<id>` на настоящих.
+Сборка: `scripts/build-images.sh [id]`. Проверка: `TestContract` без виртуалок, `go test -tags e2e ./platform/internal/lab/ -parallel 1 -run TestScenario/<id>` на настоящих.
+
+Сюжеты сейчас: `pool-exhausted`, `slow-orders`. `Scenario.Rise` поднимает нагрузку по расписанию, см. [ADR 0006](adr/0006-traffic-reveals-the-fault.md).
 
 ## Основные сущности
 
@@ -55,7 +57,7 @@ scenarios/<id>/
 
 ## Запуск стенда
 
-Firecracker → `/sbin/lab-init` (overlay на диск стенда) → `labagent` → `/etc/lab/boot` сюжета (`lab-pg-start`, `lab-service-start`) → нагрузка → наблюдение за алертом. Агент завершился — виртуалка выключается, стенд заканчивается.
+Firecracker → `/sbin/lab-init` (overlay на диск стенда) → `labagent` → `/etc/lab/boot` сюжета (`lab-pg-start`, `lab-service-start`) → нагрузка, с `Rise` сперва тихая часть → наблюдение за алертом. Агент завершился — виртуалка выключается, стенд заканчивается.
 
 ## Composition root
 

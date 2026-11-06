@@ -22,6 +22,12 @@ func TestContract(t *testing.T) {
 			checkFiles(t, sc.ID)
 			checkTexts(t, sc)
 			checkLoad(t, sc.Load)
+			if sc.Rise != nil {
+				checkLoad(t, sc.Rise.Load)
+				if sc.Rise.After <= 0 {
+					t.Error("у подъёма нагрузки нет срока")
+				}
+			}
 			checkAlert(t, sc.Alert)
 			checkChecks(t, sc)
 			checkRepairs(t, sc)

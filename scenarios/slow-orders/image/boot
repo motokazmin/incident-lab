@@ -1,0 +1,7 @@
+#!/bin/sh
+# Запускается агентом при старте песочницы. Завершается, когда сервис отвечает.
+set -e
+lab-pg-start
+# Первое чтение копирует файлы таблицы на диск стенда: пусть это случится до нагрузки.
+psql -U postgres -d shop -Atc "SELECT count(*) FROM orders" >/dev/null
+lab-service-start

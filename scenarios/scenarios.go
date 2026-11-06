@@ -4,11 +4,13 @@ package scenarios
 import (
 	"incident-lab/platform/scenario"
 	poolexhausted "incident-lab/scenarios/pool-exhausted"
+	sloworders "incident-lab/scenarios/slow-orders"
 )
 
 // All возвращает все сюжеты.
 func All() []scenario.Scenario {
 	return []scenario.Scenario{
 		poolexhausted.New(),
+		sloworders.New(),
 	}
 }

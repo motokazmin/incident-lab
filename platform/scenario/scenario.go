@@ -27,6 +27,13 @@ type LoadProfile struct {
 	Requests   []Request
 }
 
+// Rise — смена нагрузки по расписанию: через After после старта стенда идёт Load, и
+// больше тихой части нет, в том числе после проверки починки.
+type Rise struct {
+	After time.Duration
+	Load  LoadProfile
+}
+
 // Stats — итог прогона нагрузки, измеренный снаружи песочницы.
 type Stats struct {
 	Sent   int
@@ -128,6 +135,7 @@ type Scenario struct {
 	FixHow    []string // как применить правку, по шагу на строку
 	Alert     Alert
 	Load      LoadProfile
+	Rise      *Rise // пусто — нагрузка не меняется
 	Checks    []Check
 	Repairs   []Repair // только для тестов, дежурному не показывается
 	Reference []Step   // путь от симптома к причине; закрывается как и Repairs

@@ -17,11 +17,12 @@ import (
 	"incident-lab/platform/internal/agentproto"
 	"incident-lab/platform/internal/lab"
 	"incident-lab/platform/internal/sandbox/firecracker"
+	"incident-lab/platform/internal/verifier"
 	"incident-lab/platform/scenario"
 	"incident-lab/scenarios"
 )
 
-// Запуск: go test -tags e2e ./platform/internal/lab/ -v -timeout 15m
+// Запуск: go test -tags e2e ./platform/internal/lab/ -v -parallel 1 -timeout 3h
 
 func manager(t *testing.T) *lab.Manager {
 	t.Helper()
@@ -138,7 +139,7 @@ func verify(t *testing.T, l *lab.Lab) *lab.View {
 		t.Fatal(err)
 	}
 	waitState(t, l, 100*time.Millisecond+time.Second, lab.StateVerifying, lab.StateResolved, lab.StateAlert, lab.StateHealthy)
-	v := waitState(t, l, 2*time.Minute, lab.StateResolved, lab.StateAlert, lab.StateHealthy)
+	v := waitState(t, l, verifier.Timeout+30*time.Second, lab.StateResolved, lab.StateAlert, lab.StateHealthy)
 	for _, i := range v.Report.Items {
 		t.Logf("  [%v] %s: %s", i.Pass, i.Name, i.Detail)
 	}
