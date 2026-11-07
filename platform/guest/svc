@@ -3,6 +3,22 @@
 set -euo pipefail
 . /etc/lab/service.env
 
+# Красит строки лога: 5xx красным, 4xx жёлтым, от 500 мс сиреневым, обычные запросы тускло,
+# сообщения самого сервиса жирным. Правила общие: цвет не должен подсказывать ответ сюжета.
+paint() {
+  awk '{
+    color = 1
+    if (match($0, /status=[0-9]+/)) {
+      code = substr($0, RSTART + 7, 1)
+      d = match($0, /dur=[^ ]+/) ? substr($0, RSTART + 4, RLENGTH - 4) : "0s"
+      slow = d ~ /ms$/ ? d + 0 >= 500 : d + 0 > 0
+      color = code == 5 ? 91 : code == 4 ? 33 : slow ? 95 : 2
+    }
+    printf "\033[%sm%s\033[0m\n", color, $0
+    fflush()
+  }'
+}
+
 # Убивает процесс и ждёт, пока супервизор поднимет новый и тот ответит.
 bounce() {
   pkill -x "$SERVICE" || true
@@ -17,7 +33,10 @@ bounce() {
 
 case "${1:-}" in
   status)  pgrep -a "$SERVICE" || echo "$SERVICE не запущен" ;;
-  logs)    exec tail -n "${2:-50}" -f "/var/log/$SERVICE.log" ;;
+  logs)
+    # Цвет только в терминале: в конвейере (svc logs | grep) остаётся чистый текст.
+    [ -t 1 ] || exec tail -n "${2:-50}" -f "/var/log/$SERVICE.log"
+    tail -n "${2:-50}" -f "/var/log/$SERVICE.log" | paint ;;
   restart) bounce; echo "$SERVICE перезапущен" ;;
   deploy)
     cd /srv/app

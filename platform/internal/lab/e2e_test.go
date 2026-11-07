@@ -240,6 +240,42 @@ func TestScenario(t *testing.T) {
 	}
 }
 
+// TestLogColors проверяет раскраску в настоящем госте: awk там busybox, а вывод идёт в терминал.
+func TestLogColors(t *testing.T) {
+	m := manager(t)
+	l := start(t, m, scenarios.All()[0].ID)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	conn, err := l.Terminal(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	cmd := `. /etc/lab/service.env; printf 'a status=500 dur=1ms\nb status=404 dur=1ms\nc status=200 dur=500ms\nd status=200 dur=1.2s\ne status=200 dur=499ms\nf status=200 dur=0s\nsomething\n' >>/var/log/$SERVICE.log; svc logs 500` + "\n"
+	if err := agentproto.WriteFrame(conn, agentproto.FrameData, []byte(cmd)); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"\x1b[91ma status=500", "\x1b[33mb status=404", "\x1b[95mc status=200", "\x1b[95md status=200",
+		"\x1b[2me status=200", "\x1b[2mf status=200", "\x1b[1msomething\x1b[0m",
+	}
+	var buf bytes.Buffer
+	for {
+		_, p, err := agentproto.ReadFrame(conn)
+		if err != nil {
+			t.Fatalf("цвета не появились: %v\n%q", err, buf.String())
+		}
+		buf.Write(p)
+		seen := true
+		for _, w := range want {
+			seen = seen && strings.Contains(buf.String(), w)
+		}
+		if seen {
+			return
+		}
+	}
+}
+
 // Ctrl+C и Ctrl+\ в терминале останавливают команду, как в обычной консоли:
 // маска игнорируемых сигналов наследуется от PID 1 через агента.
 func TestTerminalSignals(t *testing.T) {
