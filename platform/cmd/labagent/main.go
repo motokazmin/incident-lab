@@ -35,6 +35,11 @@ const (
 var actionName = regexp.MustCompile(`^[a-z0-9-]+$`)
 
 func main() {
+	// Без агента стенд выключается, поэтому OOM killer его не трогает. Запущенным процессам
+	// оценка возвращается в 0 (см. command), иначе они унаследовали бы защиту.
+	if err := os.WriteFile("/proc/self/oom_score_adj", []byte("-1000"), 0); err != nil {
+		log.Print(err)
+	}
 	var ready atomic.Bool
 	var bootErr atomic.Value
 	go func() {
@@ -72,6 +77,14 @@ func main() {
 	log.Fatal(http.Serve(l, mux))
 }
 
+// unprotect сбрасывает унаследованную от агента защиту от OOM и заменяет себя программой.
+const unprotect = `echo 0 >/proc/self/oom_score_adj && exec "$@"`
+
+// command запускает программу без защиты агента от OOM killer.
+func command(ctx context.Context, name string, args ...string) *exec.Cmd {
+	return exec.CommandContext(ctx, "/bin/sh", append([]string{"-c", unprotect, "lab", name}, args...)...)
+}
+
 // runBoot запускает скрипт сюжета с выводом в файл. Через канал нельзя: фоновый демон,
 // оставшийся без перенаправления, держал бы его открытым, и запуск не закончился бы.
 func runBoot(script, logPath string) error {
@@ -80,7 +93,7 @@ func runBoot(script, logPath string) error {
 		return err
 	}
 	defer f.Close()
-	cmd := exec.Command(script)
+	cmd := command(context.Background(), script)
 	cmd.Stdout, cmd.Stderr = f, f
 	if err := cmd.Run(); err != nil {
 		out, _ := os.ReadFile(logPath)
@@ -118,7 +131,7 @@ func relay(c net.Conn) {
 
 func terminal(c net.Conn) {
 	defer c.Close()
-	cmd := exec.Command("/bin/bash", "-l")
+	cmd := command(context.Background(), "/bin/bash", "-l")
 	cmd.Dir = workDir
 	cmd.Env = []string{"TERM=xterm-256color", "HOME=/root", "PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin", "LANG=C.UTF-8", "GOFLAGS=-mod=vendor"}
 	f, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: 120, Rows: 30})
@@ -218,7 +231,7 @@ func runAction(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, filepath.Join(actionsDir, name)).CombinedOutput()
+	out, err := command(ctx, filepath.Join(actionsDir, name)).CombinedOutput()
 	if err != nil {
 		http.Error(w, string(out)+err.Error(), http.StatusInternalServerError)
 		return

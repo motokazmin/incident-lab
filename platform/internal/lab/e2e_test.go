@@ -251,13 +251,14 @@ func TestLogColors(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	cmd := `. /etc/lab/service.env; printf 'a status=500 dur=1ms\nb status=404 dur=1ms\nc status=200 dur=500ms\nd status=200 dur=1.2s\ne status=200 dur=499ms\nf status=200 dur=0s\nsomething\n' >>/var/log/$SERVICE.log; svc logs 500` + "\n"
+	cmd := `. /etc/lab/service.env; printf 'a status=500 dur=1ms\nb status=404 dur=1ms\nc status=200 dur=500ms\nd status=200 dur=1.2s\ne status=200 dur=499ms\nf status=200 dur=0s\nsomething\n2026/11/07 21:06:21 shop завершился: сигнал KILL, код 137; перезапуск\n' >>/var/log/$SERVICE.log; svc logs 500` + "\n"
 	if err := agentproto.WriteFrame(conn, agentproto.FrameData, []byte(cmd)); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
 		"\x1b[91ma status=500", "\x1b[33mb status=404", "\x1b[95mc status=200", "\x1b[95md status=200",
 		"\x1b[2me status=200", "\x1b[2mf status=200", "\x1b[1msomething\x1b[0m",
+		"\x1b[1;97;41m2026/11/07 21:06:21 shop завершился: сигнал KILL, код 137; перезапуск\x1b[0m",
 	}
 	var buf bytes.Buffer
 	for {
@@ -273,6 +274,42 @@ func TestLogColors(t *testing.T) {
 		if seen {
 			return
 		}
+	}
+}
+
+// TestServiceExit: падение сервиса видно в логе и счётчике. Агент и супервизор защищены от
+// OOM killer, а сервис и всё, что запускает агент, нет: иначе честная ложная починка
+// «защитить сервис» убила бы стенд или оставила сервис без супервизора.
+func TestServiceExit(t *testing.T) {
+	m := manager(t)
+	l := start(t, m, scenarios.All()[0].ID)
+	out := shell(t, l, `echo "agent=$(cat /proc/$(pidof labagent)/oom_score_adj) term=$(cat /proc/self/oom_score_adj) svc=$(cat /proc/$(pidof shop)/oom_score_adj) sup=$(cat /proc/$(pgrep -of 'SERVICE.restarts')/oom_score_adj)"`)
+	if !strings.Contains(out, "agent=-1000 term=0 svc=0 sup=-1000") {
+		t.Fatalf("oom_score_adj:\n%s", out)
+	}
+	shell(t, l, `pkill -9 -x shop; for i in $(seq 50); do curl -fs -o /dev/null 127.0.0.1:8080/products/1 && break; sleep 0.1; done`)
+	out = shell(t, l, `echo "lines=$(tail -n 5 /var/log/shop.log | grep -c 'shop завершился: сигнал KILL, код 137; перезапуск')"; echo "n=$(/etc/lab/actions/service-restarts)"; svc status`)
+	for _, w := range []string{"lines=1", "n=1", "перезапусков с начала: 1"} {
+		if !strings.Contains(out, w) {
+			t.Fatalf("нет %q:\n%s", w, out)
+		}
+	}
+}
+
+// TestServiceCgroup: общие действия о памяти сервиса не врут в окно перезапуска. Рестарты
+// идут подряд, а действия читаются всё это время: лимит и cgroup всегда на месте,
+// счётчик перезапусков всегда число. Сюжет — keeps-restarting, единственный с MEMORY_MAX.
+func TestServiceCgroup(t *testing.T) {
+	m := manager(t)
+	l := start(t, m, "keeps-restarting")
+	shell(t, l, `(setsid sh -c 'while :; do svc restart; done' </dev/null >/dev/null 2>&1 &)`)
+	out := shell(t, l, `a=/etc/lab/actions; bad=0; for i in $(seq 150); do`+
+		` l=$($a/memory-limit); [ "$l" = "268435456 yes" ] || { bad=$((bad+1)); echo "limit=[$l]"; };`+
+		` n=$($a/service-restarts); case "$n" in ''|*[!0-9]*) bad=$((bad+1)); echo "restarts=[$n]";; esac;`+
+		` o=$($a/oom-events); case "$o" in ''|*[!0-9]*) bad=$((bad+1)); echo "oom=[$o]";; esac;`+
+		` done; pkill -f 'while :; do svc restart'; echo "BAD-$bad-END"`)
+	if !strings.Contains(out, "BAD-0-END") {
+		t.Fatalf("действия врут в окно перезапуска:\n%s", out)
 	}
 }
 

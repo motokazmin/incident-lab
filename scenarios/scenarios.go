@@ -3,6 +3,7 @@ package scenarios
 
 import (
 	"incident-lab/platform/scenario"
+	keepsrestarting "incident-lab/scenarios/keeps-restarting"
 	poolexhausted "incident-lab/scenarios/pool-exhausted"
 	sloworders "incident-lab/scenarios/slow-orders"
 )
@@ -12,5 +13,6 @@ func All() []scenario.Scenario {
 	return []scenario.Scenario{
 		poolexhausted.New(),
 		sloworders.New(),
+		keepsrestarting.New(),
 	}
 }

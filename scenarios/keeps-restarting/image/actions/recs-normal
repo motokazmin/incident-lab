@@ -1,0 +1,2 @@
+#!/bin/sh
+curl -fsS -m 5 -X POST http://127.0.0.1:9090/admin/normal

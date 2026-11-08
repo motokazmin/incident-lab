@@ -25,11 +25,11 @@ scenarios/<id>/
   service/                учебный сервис с vendor
 ```
 
-Общая обвязка лежит в `platform/guest` и попадает в базовый образ: `svc`, `lab-pg-start`, `lab-service-start`, `lab-setup`, действие `restart-service`. Вход стенда всегда `127.0.0.1:8080`, код всегда в `/srv/app`.
+Общая обвязка лежит в `platform/guest` и попадает в базовый образ: `svc`, `lab-pg-start`, `lab-service-start` (супервизор: строка о выходе, счётчик перезапусков, cgroup по `MEMORY_MAX`), `lab-service-run`, `lab-setup`, действия `restart-service`, `service-restarts`, а для сюжетов с `MEMORY_MAX` — `memory-limit` и `oom-events`. Агент защищён от OOM killer, см. [ADR 0007](adr/0007-service-crash-and-memory-limit.md). Вход стенда всегда `127.0.0.1:8080`, код всегда в `/srv/app`.
 
 Сборка: `scripts/build-images.sh [id]`. Проверка: `TestContract` без виртуалок, `go test -tags e2e ./platform/internal/lab/ -parallel 1 -run TestScenario/<id>` на настоящих.
 
-Сюжеты сейчас: `pool-exhausted`, `slow-orders`. `Scenario.Rise` поднимает нагрузку по расписанию, см. [ADR 0006](adr/0006-traffic-reveals-the-fault.md).
+Сюжеты сейчас: `pool-exhausted`, `slow-orders`, `keeps-restarting`. У `keeps-restarting` есть второй процесс — заглушка чужого сервиса рекомендаций в `recs/`, бинарник `/opt/ml/recs` вне `/srv/app`, его запускает `boot` сюжета. `Scenario.Rise` поднимает нагрузку по расписанию, см. [ADR 0006](adr/0006-traffic-reveals-the-fault.md).
 
 ## Основные сущности
 

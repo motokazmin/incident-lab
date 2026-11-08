@@ -1,0 +1,26 @@
+#!/bin/sh
+# Лимит памяти cgroup сервиса и где сервис: "268435456 yes", если каждый его процесс
+# в этой cgroup, "no", если какой-то вне её, "none", если процесса нет. В окно перезапуска
+# процесса нет долю секунды, поэтому действие ждёт его до 5 с: иначе проверка приняла бы
+# перезапуск за выход из cgroup. Завершающийся процесс уже вне cgroup, но ещё виден
+# в /proc, поэтому "no" засчитывается, только если повторилось через 0,1 с.
+. /etc/lab/service.env
+cg=/sys/fs/cgroup/$SERVICE
+st=none
+out=0
+i=0
+while [ $i -lt 50 ]; do
+    st=none
+    for p in $(pidof "$SERVICE"); do
+        if grep -qx "$p" "$cg/cgroup.procs"; then
+            [ "$st" = no ] || st=yes
+        elif [ -d "/proc/$p" ]; then
+            st=no
+        fi
+    done
+    if [ "$st" = no ]; then out=$((out+1)); else out=0; fi
+    [ "$st" = yes ] || [ $out -ge 2 ] && break
+    i=$((i+1))
+    sleep 0.1
+done
+echo "$(cat "$cg/memory.max") $st"

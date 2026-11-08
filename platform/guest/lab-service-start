@@ -1,7 +1,34 @@
 #!/bin/sh
 # Запускает учебный сервис под супервизором и ждёт ответа. Вызывается из boot сюжета.
+# Супервизор пишет в лог, как завершился процесс, и считает перезапуски для проверок.
+# MEMORY_MAX из service.env (например 256M) кладёт сервис в cgroup с этим лимитом памяти:
+# как лимит контейнера, ядро убивает сервис, а не замирает всей машиной. Супервизор
+# остаётся вне cgroup и вне досягаемости OOM killer, иначе жертвой мог стать он,
+# и сервис больше не поднялся бы. Запуск самого сервиса — lab-service-run.
 . /etc/lab/service.env
-setsid sh -c "while :; do /srv/app/bin/$SERVICE >>/var/log/$SERVICE.log 2>&1; sleep 0.2; done" </dev/null >/dev/null 2>&1 &
+mkdir -p /run/lab
+echo 0 >"/run/lab/$SERVICE.restarts"
+if [ -n "${MEMORY_MAX:-}" ]; then
+    echo +memory >/sys/fs/cgroup/cgroup.subtree_control
+    mkdir -p "/sys/fs/cgroup/$SERVICE"
+    echo "$MEMORY_MAX" >"/sys/fs/cgroup/$SERVICE/memory.max"
+fi
+export SERVICE
+setsid sh -c '
+    echo -1000 >/proc/self/oom_score_adj
+    log="/var/log/$SERVICE.log"
+    n=0
+    while :; do
+        lab-service-run >>"$log" 2>&1
+        rc=$?
+        n=$((n+1))
+        # Через mv: читатель не застанет файл пустым между обнулением и записью.
+        echo $n >"/run/lab/$SERVICE.restarts.tmp"
+        mv "/run/lab/$SERVICE.restarts.tmp" "/run/lab/$SERVICE.restarts"
+        if [ $rc -gt 128 ]; then why="сигнал $(kill -l $((rc-128)))"; else why="выход"; fi
+        echo "$(date "+%Y/%m/%d %H:%M:%S") $SERVICE завершился: $why, код $rc; перезапуск" >>"$log"
+        sleep 0.2
+    done' </dev/null >/dev/null 2>&1 &
 i=0
 until curl -fsS -o /dev/null "http://127.0.0.1:8080$PROBE"; do
     i=$((i+1)); [ $i -gt 100 ] && exit 1

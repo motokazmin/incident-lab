@@ -1,0 +1,4 @@
+#!/bin/sh
+# Сколько раз cgroup сервиса из MEMORY_MAX упиралась в лимит памяти, с убийством или без.
+. /etc/lab/service.env
+awk '$1 == "oom" { print $2 }' "/sys/fs/cgroup/$SERVICE/memory.events"

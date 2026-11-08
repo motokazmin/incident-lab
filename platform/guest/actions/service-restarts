@@ -1,0 +1,4 @@
+#!/bin/sh
+# Сколько раз сервис завершался с начала стенда, считает супервизор из lab-service-start.
+. /etc/lab/service.env
+cat "/run/lab/$SERVICE.restarts"
