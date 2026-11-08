@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -294,6 +295,15 @@ func TestServiceExit(t *testing.T) {
 			t.Fatalf("нет %q:\n%s", w, out)
 		}
 	}
+	// Без MEMORY_MAX копии в tmpfs нет, а код выше 192 — выход, а не сигнал.
+	out = shell(t, l, `echo "exe=$(readlink /proc/$(pidof shop)/exe)"; cd /srv/app/bin && mv shop shop.real &&`+
+		` printf '#!/bin/sh\nexit 200\n' >shop && chmod +x shop && pkill -x shop; sleep 1; mv shop.real shop;`+
+		` for i in $(seq 50); do curl -fs -o /dev/null 127.0.0.1:8080/products/1 && break; sleep 0.1; done;`+
+		` echo "exit200=$(grep -c 'shop завершился: выход, код 200; перезапуск' /var/log/shop.log)"; echo "copies=$(ls /run/lab/bin 2>/dev/null | wc -l)"`)
+	if !regexp.MustCompile(`exe=/srv/app/bin/shop\s`).MatchString(out) ||
+		!regexp.MustCompile(`exit200=[1-9]`).MatchString(out) || !regexp.MustCompile(`copies=0\s`).MatchString(out) {
+		t.Fatalf("запуск без лимита или код 200:\n%s", out)
+	}
 }
 
 // TestServiceCgroup: общие действия о памяти сервиса не врут в окно перезапуска. Рестарты
@@ -302,6 +312,9 @@ func TestServiceExit(t *testing.T) {
 func TestServiceCgroup(t *testing.T) {
 	m := manager(t)
 	l := start(t, m, "keeps-restarting")
+	if out := shell(t, l, `echo "exe=$(readlink /proc/$(pidof shop)/exe)"`); !regexp.MustCompile(`exe=/run/lab/bin/shop\s`).MatchString(out) {
+		t.Fatalf("с MEMORY_MAX сервис не из копии в tmpfs:\n%s", out)
+	}
 	shell(t, l, `(setsid sh -c 'while :; do svc restart; done' </dev/null >/dev/null 2>&1 &)`)
 	out := shell(t, l, `a=/etc/lab/actions; bad=0; for i in $(seq 150); do`+
 		` l=$($a/memory-limit); [ "$l" = "268435456 yes" ] || { bad=$((bad+1)); echo "limit=[$l]"; };`+

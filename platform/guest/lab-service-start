@@ -25,7 +25,9 @@ setsid sh -c '
         # Через mv: читатель не застанет файл пустым между обнулением и записью.
         echo $n >"/run/lab/$SERVICE.restarts.tmp"
         mv "/run/lab/$SERVICE.restarts.tmp" "/run/lab/$SERVICE.restarts"
-        if [ $rc -gt 128 ]; then why="сигнал $(kill -l $((rc-128)))"; else why="выход"; fi
+        # Код 129–192 — смерть от сигнала 1–64 (больше в Linux нет); код выше — обычный выход.
+        # Выход с кодом 129–192 по своей воле отсюда неотличим от сигнала, как и в любой оболочке.
+        if [ $rc -gt 128 ] && [ $rc -le 192 ]; then why="сигнал $(kill -l $((rc-128)))"; else why="выход"; fi
         echo "$(date "+%Y/%m/%d %H:%M:%S") $SERVICE завершился: $why, код $rc; перезапуск" >>"$log"
         sleep 0.2
     done' </dev/null >/dev/null 2>&1 &
