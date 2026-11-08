@@ -20,6 +20,7 @@ func TestContract(t *testing.T) {
 			}
 			seen[sc.ID] = true
 			checkFiles(t, sc.ID)
+			checkActions(t, sc.ID)
 			checkTexts(t, sc)
 			checkLoad(t, sc.Load)
 			if sc.Rise != nil {
@@ -33,6 +34,17 @@ func TestContract(t *testing.T) {
 			checkRepairs(t, sc)
 			checkReference(t, sc)
 		})
+	}
+}
+
+// Действие сюжета не подменяет общее действие каркаса: lab-setup копирует их в один каталог.
+func checkActions(t *testing.T, id string) {
+	t.Helper()
+	own, _ := os.ReadDir(filepath.Join(id, "image/actions"))
+	for _, e := range own {
+		if _, err := os.Stat(filepath.Join("../platform/guest/actions", e.Name())); err == nil {
+			t.Errorf("действие %s есть и в каркасе (platform/guest/actions)", e.Name())
+		}
 	}
 }
 
@@ -105,6 +117,10 @@ func checkRepairs(t *testing.T, sc scenario.Scenario) {
 	for _, r := range sc.Repairs {
 		if len(r.Edits) == 0 && r.Shell == "" {
 			t.Errorf("починка %q ничего не делает", r.Name)
+		}
+		// Эти имена у случаев e2e без починки и с эталонным путём, по ним отбирает smoke.
+		if r.Name == "без починки" || r.Name == "эталонный путь" {
+			t.Errorf("имя починки %q занято случаем e2e", r.Name)
 		}
 		checkEdits(t, sc.ID, r)
 		if r.Pass {

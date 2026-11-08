@@ -5,7 +5,12 @@ cd /tmp/image
 . ./service.env
 mkdir -p /etc/lab/actions
 cp service.env boot /etc/lab/
-[ ! -d actions ] || cp actions/* /etc/lab/actions/
+# Действие сюжета не подменяет общее действие каркаса с тем же именем.
+for a in actions/*; do
+  [ -e "$a" ] || continue
+  [ ! -e "/etc/lab/actions/${a#actions/}" ] || { echo "действие ${a#actions/} есть в каркасе" >&2; exit 1; }
+  cp "$a" /etc/lab/actions/
+done
 chmod +x /etc/lab/boot /etc/lab/actions/*
 [ ! -f postgresql.lab.conf ] || cat postgresql.lab.conf >> /var/lib/postgresql/data/postgresql.conf
 if [ -f schema.sql ]; then

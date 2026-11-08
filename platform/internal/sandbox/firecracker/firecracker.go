@@ -36,6 +36,23 @@ type Config struct {
 	DiskOpsPerSec   int64
 }
 
+// Defaults — конфиг, с которым работает пользователь: сервер и e2e берут один и тот же,
+// иначе тесты проверяли бы не те лимиты. data — каталог .data (абсолютный путь), runDir —
+// свой у каждого запуска: New чистит его целиком.
+func Defaults(data, runDir string) Config {
+	return Config{
+		Binary:          filepath.Join(data, "fc/firecracker"),
+		Kernel:          filepath.Join(data, "fc/vmlinux"),
+		ImagesDir:       filepath.Join(data, "images"),
+		RunDir:          runDir,
+		VCPUs:           2,
+		MemMiB:          1024,
+		LabDiskMiB:      1024,
+		DiskBytesPerSec: 100 << 20,
+		DiskOpsPerSec:   5000,
+	}
+}
+
 // Provider создаёт виртуалки.
 type Provider struct {
 	cfg Config

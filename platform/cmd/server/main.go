@@ -51,15 +51,5 @@ func sandboxConfig(data string) firecracker.Config {
 	if err != nil {
 		log.Fatal(err)
 	}
-	return firecracker.Config{
-		Binary:          filepath.Join(abs, "fc/firecracker"),
-		Kernel:          filepath.Join(abs, "fc/vmlinux"),
-		ImagesDir:       filepath.Join(abs, "images"),
-		RunDir:          filepath.Join(abs, "run"),
-		VCPUs:           2,
-		MemMiB:          1024,
-		LabDiskMiB:      1024,
-		DiskBytesPerSec: 100 << 20,
-		DiskOpsPerSec:   5000,
-	}
+	return firecracker.Defaults(abs, filepath.Join(abs, "run"))
 }

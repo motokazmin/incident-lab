@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -23,7 +22,36 @@ import (
 	"incident-lab/scenarios"
 )
 
-// Запуск: go test -tags e2e ./platform/internal/lab/ -v -parallel 1 -timeout 3h
+// Запуск — scripts/e2e.sh, уровни прогона — ADR 0008.
+
+// Сюжеты, на которых проверяется каркас: без лимита памяти и с MEMORY_MAX. Правка этих
+// сюжетов запускает и контрактные тесты, scripts/e2e.sh читает имена отсюда.
+const (
+	fwPlain  = "pool-exhausted"
+	fwMemory = "keeps-restarting"
+)
+
+// env — префикс команды в госте: SERVICE, PROBE и MEMORY_MAX сюжета из service.env,
+// чтобы тесты каркаса не знали имени сервиса и адреса проверки.
+const env = ". /etc/lab/service.env; "
+
+// Ответ проверки в госте склеивается из двух строк, чтобы эхо команды его не содержало.
+func ok(name string) string { return name + `-""ok` }
+
+// pickCase решает, гонять ли случай сюжета. LAB_E2E_CASES: пусто — все случаи, smoke —
+// только «без починки» и «эталонный путь»: они видят, что каркас сломал сюжет.
+func pickCase(t *testing.T, name string) bool {
+	t.Helper()
+	switch v := os.Getenv("LAB_E2E_CASES"); v {
+	case "":
+		return true
+	case "smoke":
+		return name == caseNoFixName || name == caseRefName
+	default:
+		t.Fatalf("LAB_E2E_CASES=%q: ждали пусто или smoke", v)
+	}
+	return false
+}
 
 func manager(t *testing.T) *lab.Manager {
 	t.Helper()
@@ -36,11 +64,7 @@ func manager(t *testing.T) *lab.Manager {
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	p, err := firecracker.New(firecracker.Config{
-		Binary: data + "/fc/firecracker", Kernel: data + "/fc/vmlinux", ImagesDir: data + "/images",
-		RunDir: runDir, VCPUs: 2, MemMiB: 1024, LabDiskMiB: 1024,
-		DiskBytesPerSec: 100 << 20, DiskOpsPerSec: 5000,
-	})
+	p, err := firecracker.New(firecracker.Defaults(data, runDir))
 	if err != nil {
 		t.Skip(err)
 	}
@@ -202,36 +226,65 @@ func firstGood(list []scenario.Repair) scenario.Repair {
 	panic("контракт: нет верной починки")
 }
 
+const (
+	caseNoFixName = "без починки"
+	caseRefName   = "эталонный путь"
+)
+
+// caseNoFix: сбой случается сам, алерт приходит, проверка без починки проваливается.
+func caseNoFix(t *testing.T, m *lab.Manager, sc scenario.Scenario) {
+	l := start(t, m, sc.ID)
+	begin := time.Now()
+	waitState(t, l, 4*time.Minute, lab.StateAlert)
+	t.Logf("алерт через %s", time.Since(begin).Round(time.Second))
+	if v := verify(t, l); v.Report.Passed {
+		t.Fatal("проверка прошла без починки")
+	}
+}
+
+// caseReference: команды эталонного пути показывают признаки, верная починка проходит до разбора.
+func caseReference(t *testing.T, m *lab.Manager, sc scenario.Scenario) {
+	l := start(t, m, sc.ID)
+	waitState(t, l, 4*time.Minute, lab.StateAlert)
+	for _, s := range sc.Reference {
+		showStep(t, l, s)
+	}
+	fix := firstGood(sc.Repairs)
+	runRepair(t, l, fix)
+	checkOutcome(t, verify(t, l), fix)
+}
+
+func byID(t *testing.T, id string) scenario.Scenario {
+	t.Helper()
+	for _, sc := range scenarios.All() {
+		if sc.ID == id {
+			return sc
+		}
+	}
+	t.Fatalf("нет сюжета %s", id)
+	return scenario.Scenario{}
+}
+
 // TestScenario проверяет каждый сюжет на настоящих виртуалках: сбой случается сам,
-// верные починки проходят, ложные нет. Выбрать один: -run TestScenario/<id>.
+// верные починки проходят, ложные нет. Один сюжет: -run TestScenario/<id>; какие случаи —
+// LAB_E2E_CASES, см. pickCase.
 func TestScenario(t *testing.T) {
 	m := manager(t)
 	for _, sc := range scenarios.All() {
 		t.Run(sc.ID, func(t *testing.T) {
-			t.Run("без починки", func(t *testing.T) {
-				t.Parallel()
-				l := start(t, m, sc.ID)
-				begin := time.Now()
-				waitState(t, l, 4*time.Minute, lab.StateAlert)
-				t.Logf("алерт через %s", time.Since(begin).Round(time.Second))
-				if v := verify(t, l); v.Report.Passed {
-					t.Fatal("проверка прошла без починки")
+			run := func(name string, f func(t *testing.T)) {
+				if !pickCase(t, name) {
+					return
 				}
-			})
-			t.Run("эталонный путь", func(t *testing.T) {
-				t.Parallel()
-				l := start(t, m, sc.ID)
-				waitState(t, l, 4*time.Minute, lab.StateAlert)
-				for _, s := range sc.Reference {
-					showStep(t, l, s)
-				}
-				fix := firstGood(sc.Repairs)
-				runRepair(t, l, fix)
-				checkOutcome(t, verify(t, l), fix)
-			})
-			for _, r := range sc.Repairs {
-				t.Run(r.Name, func(t *testing.T) {
+				t.Run(name, func(t *testing.T) {
 					t.Parallel()
+					f(t)
+				})
+			}
+			run(caseNoFixName, func(t *testing.T) { caseNoFix(t, m, sc) })
+			run(caseRefName, func(t *testing.T) { caseReference(t, m, sc) })
+			for _, r := range sc.Repairs {
+				run(r.Name, func(t *testing.T) {
 					l := start(t, m, sc.ID)
 					runRepair(t, l, r)
 					checkOutcome(t, verify(t, l), r)
@@ -241,10 +294,19 @@ func TestScenario(t *testing.T) {
 	}
 }
 
+// TestPipeline — цепочка стенда целиком, а не сюжет: запуск, нагрузка, алерт, проверка,
+// подсказки и разбор. Идёт в контрактном наборе.
+func TestPipeline(t *testing.T) {
+	m := manager(t)
+	sc := byID(t, fwPlain)
+	t.Run(caseNoFixName, func(t *testing.T) { caseNoFix(t, m, sc) })
+	t.Run(caseRefName, func(t *testing.T) { caseReference(t, m, sc) })
+}
+
 // TestLogColors проверяет раскраску в настоящем госте: awk там busybox, а вывод идёт в терминал.
 func TestLogColors(t *testing.T) {
 	m := manager(t)
-	l := start(t, m, scenarios.All()[0].ID)
+	l := start(t, m, fwPlain)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	conn, err := l.Terminal(ctx)
@@ -283,41 +345,98 @@ func TestLogColors(t *testing.T) {
 // «защитить сервис» убила бы стенд или оставила сервис без супервизора.
 func TestServiceExit(t *testing.T) {
 	m := manager(t)
-	l := start(t, m, scenarios.All()[0].ID)
-	out := shell(t, l, `echo "agent=$(cat /proc/$(pidof labagent)/oom_score_adj) term=$(cat /proc/self/oom_score_adj) svc=$(cat /proc/$(pidof shop)/oom_score_adj) sup=$(cat /proc/$(pgrep -of 'SERVICE.restarts')/oom_score_adj)"`)
+	l := start(t, m, fwPlain)
+	up := `for i in $(seq 50); do curl -fs -o /dev/null 127.0.0.1:8080$PROBE && break; sleep 0.1; done`
+	out := shell(t, l, env+`echo "agent=$(cat /proc/$(pidof labagent)/oom_score_adj) term=$(cat /proc/self/oom_score_adj) svc=$(cat /proc/$(pidof $SERVICE)/oom_score_adj) sup=$(cat /proc/$(pgrep -of 'SERVICE.restarts')/oom_score_adj)"`)
 	if !strings.Contains(out, "agent=-1000 term=0 svc=0 sup=-1000") {
 		t.Fatalf("oom_score_adj:\n%s", out)
 	}
-	shell(t, l, `pkill -9 -x shop; for i in $(seq 50); do curl -fs -o /dev/null 127.0.0.1:8080/products/1 && break; sleep 0.1; done`)
-	out = shell(t, l, `echo "lines=$(tail -n 5 /var/log/shop.log | grep -c 'shop завершился: сигнал KILL, код 137; перезапуск')"; echo "n=$(/etc/lab/actions/service-restarts)"; svc status`)
+	shell(t, l, env+`pkill -9 -x $SERVICE; `+up)
+	out = shell(t, l, env+`echo "lines=$(tail -n 5 /var/log/$SERVICE.log | grep -c "$SERVICE завершился: сигнал KILL, код 137; перезапуск")"; echo "n=$(/etc/lab/actions/service-restarts)"; svc status`)
 	for _, w := range []string{"lines=1", "n=1", "перезапусков с начала: 1"} {
 		if !strings.Contains(out, w) {
 			t.Fatalf("нет %q:\n%s", w, out)
 		}
 	}
 	// Без MEMORY_MAX копии в tmpfs нет, а код выше 192 — выход, а не сигнал.
-	out = shell(t, l, `echo "exe=$(readlink /proc/$(pidof shop)/exe)"; cd /srv/app/bin && mv shop shop.real &&`+
-		` printf '#!/bin/sh\nexit 200\n' >shop && chmod +x shop && pkill -x shop; sleep 1; mv shop.real shop;`+
-		` for i in $(seq 50); do curl -fs -o /dev/null 127.0.0.1:8080/products/1 && break; sleep 0.1; done;`+
-		` echo "exit200=$(grep -c 'shop завершился: выход, код 200; перезапуск' /var/log/shop.log)"; echo "copies=$(ls /run/lab/bin 2>/dev/null | wc -l)"`)
-	if !regexp.MustCompile(`exe=/srv/app/bin/shop\s`).MatchString(out) ||
-		!regexp.MustCompile(`exit200=[1-9]`).MatchString(out) || !regexp.MustCompile(`copies=0\s`).MatchString(out) {
-		t.Fatalf("запуск без лимита или код 200:\n%s", out)
+	out = shell(t, l, env+`[ -z "${MEMORY_MAX:-}" ] && [ "$(readlink /proc/$(pidof $SERVICE)/exe)" = /srv/app/bin/$SERVICE ] && echo `+ok("exe")+`;`+
+		` cd /srv/app/bin && mv $SERVICE $SERVICE.real && printf '#!/bin/sh\nexit 200\n' >$SERVICE && chmod +x $SERVICE && pkill -x $SERVICE;`+
+		` sleep 1; mv $SERVICE.real $SERVICE; `+up+`;`+
+		` grep -q "$SERVICE завершился: выход, код 200; перезапуск" /var/log/$SERVICE.log && echo `+ok("exit200")+`;`+
+		` [ ! -e /run/lab/bin ] && echo `+ok("nocopy"))
+	for _, w := range []string{"exe-ok", "exit200-ok", "nocopy-ok"} {
+		if !strings.Contains(out, w) {
+			t.Fatalf("нет %s: запуск без лимита или код 200:\n%s", w, out)
+		}
+	}
+}
+
+// TestSvcRestart: svc restart и действие restart-service возвращают управление только после
+// ответа сервиса, и каждый перезапуск виден в счётчике. Иначе проверка стартует в окно
+// рестарта и ложно проваливается.
+func TestSvcRestart(t *testing.T) {
+	m := manager(t)
+	l := start(t, m, fwPlain)
+	probe := `curl -fs -o /dev/null -m 2 127.0.0.1:8080$PROBE`
+	out := shell(t, l, env+`a=/etc/lab/actions; n0=$($a/service-restarts); bad=0;`+
+		` for i in $(seq 20); do svc restart >/dev/null && `+probe+` || bad=$((bad+1)); done;`+
+		` $a/restart-service >/dev/null && `+probe+` || bad=$((bad+1));`+
+		` echo "BAD-$bad-DELTA-$(($($a/service-restarts)-n0))-END"`)
+	if !strings.Contains(out, "BAD-0-DELTA-21-END") {
+		t.Fatalf("перезапуск вернул управление до ответа или не посчитан:\n%s", out)
+	}
+}
+
+// TestSvcDeploy: svc deploy запускает именно новую сборку и ждёт её ответа — и без лимита,
+// и с копией бинарника в tmpfs. Код сюжета не трогается: метку несёт отдельный файл.
+func TestSvcDeploy(t *testing.T) {
+	m := manager(t)
+	for _, id := range []string{fwPlain, fwMemory} {
+		t.Run(id, func(t *testing.T) {
+			l := start(t, m, id)
+			out := shell(t, l, env+`cd /srv/app && printf 'package main\n\nfunc init() { println("LAB-" + "MARK") }\n' >zz_lab_mark.go &&`+
+				` svc deploy >/dev/null && curl -fs -o /dev/null -m 2 127.0.0.1:8080$PROBE && echo `+ok("up")+`;`+
+				` grep -q LAB-MARK /var/log/$SERVICE.log && echo `+ok("mark")+`;`+
+				` cmp -s /proc/$(pidof $SERVICE)/exe /srv/app/bin/$SERVICE && echo `+ok("exe"))
+			for _, w := range []string{"up-ok", "mark-ok", "exe-ok"} {
+				if !strings.Contains(out, w) {
+					t.Fatalf("нет %s: deploy не запустил новую сборку или не дождался ответа:\n%s", w, out)
+				}
+			}
+		})
+	}
+}
+
+// TestServiceOOM: в cgroup сервиса ядро убивает процесс, а не машину. Агент, супервизор
+// и сервис переживают чужой OOM в той же cgroup, событие oom видно в действии.
+func TestServiceOOM(t *testing.T) {
+	m := manager(t)
+	l := start(t, m, fwMemory)
+	out := shell(t, l, env+`[ -n "${MEMORY_MAX:-}" ] || { echo "у сюжета нет MEMORY_MAX"; exit 1; }; a=/etc/lab/actions; o0=$($a/oom-events);`+
+		` sh -c "echo \$\$ >/sys/fs/cgroup/$SERVICE/cgroup.procs; exec tail /dev/zero"; echo "hog=$?";`+
+		` [ $(($($a/oom-events)-o0)) -ge 1 ] && echo `+ok("oom")+`;`+
+		` pidof labagent >/dev/null && pgrep -f SERVICE.restarts >/dev/null && echo `+ok("alive")+`;`+
+		` for i in $(seq 50); do curl -fs -o /dev/null -m 2 127.0.0.1:8080$PROBE && echo `+ok("up")+` && break; sleep 0.1; done`)
+	for _, w := range []string{"hog=137", "oom-ok", "alive-ok", "up-ok"} {
+		if !strings.Contains(out, w) {
+			t.Fatalf("нет %s:\n%s", w, out)
+		}
 	}
 }
 
 // TestServiceCgroup: общие действия о памяти сервиса не врут в окно перезапуска. Рестарты
 // идут подряд, а действия читаются всё это время: лимит и cgroup всегда на месте,
-// счётчик перезапусков всегда число. Сюжет — keeps-restarting, единственный с MEMORY_MAX.
+// счётчик перезапусков всегда число. Лимит берётся из MEMORY_MAX сюжета fwMemory.
 func TestServiceCgroup(t *testing.T) {
 	m := manager(t)
-	l := start(t, m, "keeps-restarting")
-	if out := shell(t, l, `echo "exe=$(readlink /proc/$(pidof shop)/exe)"`); !regexp.MustCompile(`exe=/run/lab/bin/shop\s`).MatchString(out) {
+	l := start(t, m, fwMemory)
+	if out := shell(t, l, env+`[ "$(readlink /proc/$(pidof $SERVICE)/exe)" = /run/lab/bin/$SERVICE ] && echo `+ok("exe")); !strings.Contains(out, "exe-ok") {
 		t.Fatalf("с MEMORY_MAX сервис не из копии в tmpfs:\n%s", out)
 	}
 	shell(t, l, `(setsid sh -c 'while :; do svc restart; done' </dev/null >/dev/null 2>&1 &)`)
-	out := shell(t, l, `a=/etc/lab/actions; bad=0; for i in $(seq 150); do`+
-		` l=$($a/memory-limit); [ "$l" = "268435456 yes" ] || { bad=$((bad+1)); echo "limit=[$l]"; };`+
+	out := shell(t, l, env+`case "$MEMORY_MAX" in *M) ;; *) echo "MEMORY_MAX=$MEMORY_MAX: ждали <N>M"; exit 1;; esac;`+
+		` want="$((${MEMORY_MAX%M}*1024*1024)) yes"; a=/etc/lab/actions; bad=0; for i in $(seq 150); do`+
+		` l=$($a/memory-limit); [ "$l" = "$want" ] || { bad=$((bad+1)); echo "limit=[$l]"; };`+
 		` n=$($a/service-restarts); case "$n" in ''|*[!0-9]*) bad=$((bad+1)); echo "restarts=[$n]";; esac;`+
 		` o=$($a/oom-events); case "$o" in ''|*[!0-9]*) bad=$((bad+1)); echo "oom=[$o]";; esac;`+
 		` done; pkill -f 'while :; do svc restart'; echo "BAD-$bad-END"`)
@@ -330,7 +449,7 @@ func TestServiceCgroup(t *testing.T) {
 // маска игнорируемых сигналов наследуется от PID 1 через агента.
 func TestTerminalSignals(t *testing.T) {
 	m := manager(t)
-	l := start(t, m, scenarios.All()[0].ID)
+	l := start(t, m, fwPlain)
 
 	for _, c := range []struct {
 		name string
@@ -389,6 +508,6 @@ func TestTerminalSignals(t *testing.T) {
 // Осиротевшие процессы подбирает PID 1, зомби в стенде не копятся.
 func TestOrphansReaped(t *testing.T) {
 	m := manager(t)
-	l := start(t, m, scenarios.All()[0].ID)
+	l := start(t, m, fwPlain)
 	shell(t, l, `(sleep 0.2 &) ; sleep 2; ! ps -eo stat | grep -q '^Z'`)
 }
