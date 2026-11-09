@@ -82,7 +82,19 @@ func checkLoad(t *testing.T, l scenario.LoadProfile) {
 	if l.RatePerSec <= 0 || len(l.Requests) == 0 {
 		t.Fatalf("нагрузка пуста: %+v", l)
 	}
-	for i, r := range l.Requests {
+	checkRequests(t, l.Requests)
+	// Пустой залп каркас молча пропустит, и сюжет останется без симптома.
+	if b := l.Burst; b != nil {
+		if b.Every <= 0 || b.Size <= 0 || len(b.Requests) == 0 {
+			t.Fatalf("залп пуст: %+v", *b)
+		}
+		checkRequests(t, b.Requests)
+	}
+}
+
+func checkRequests(t *testing.T, reqs []scenario.Request) {
+	t.Helper()
+	for i, r := range reqs {
 		if r.Weight <= 0 || r.Method == "" || !strings.HasPrefix(r.Path, "/") {
 			t.Errorf("запрос %d: %+v", i+1, r)
 		}

@@ -286,6 +286,9 @@ func TestScenario(t *testing.T) {
 			for _, r := range sc.Repairs {
 				run(r.Name, func(t *testing.T) {
 					l := start(t, m, sc.ID)
+					if r.AfterAlert {
+						waitState(t, l, 4*time.Minute, lab.StateAlert)
+					}
 					runRepair(t, l, r)
 					checkOutcome(t, verify(t, l), r)
 				})

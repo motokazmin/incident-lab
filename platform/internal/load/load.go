@@ -22,7 +22,12 @@ const (
 	maxInflight    = 256
 	maxBuckets     = 7200
 	maxRespBody    = 64 << 10
+	maxRate        = 1000
+	maxBurst       = 64
 )
+
+// minBurstEvery — залпы не чаще: сюжет не превратит их в постоянную нагрузку. Тест укорачивает.
+var minBurstEvery = time.Second
 
 // Req — конкретный запрос последовательности.
 type Req struct {
@@ -30,33 +35,61 @@ type Req struct {
 	Expected           []int
 }
 
-// Plan выдаёт последовательность запросов, полностью заданную сидом.
+// Plan выдаёт последовательность запросов, полностью заданную сидом. У залпов свой
+// поток случайных чисел: фон не зависит от того, есть ли залпы.
 type Plan struct {
-	rng     *rand.Rand
-	profile scenario.LoadProfile
-	total   int
+	rng, burstRng     *rand.Rand
+	profile           scenario.LoadProfile
+	total, burstTotal int
 }
 
 // NewPlan создаёт последовательность.
 func NewPlan(seed uint64, p scenario.LoadProfile) *Plan {
-	total := 0
-	for _, r := range p.Requests {
-		total += r.Weight
+	pl := &Plan{rng: rand.New(rand.NewPCG(seed, 0x1ab)), burstRng: rand.New(rand.NewPCG(seed, 0xb5)),
+		profile: p, total: weight(p.Requests)}
+	if p.Burst != nil {
+		pl.burstTotal = weight(p.Burst.Requests)
 	}
-	return &Plan{rng: rand.New(rand.NewPCG(seed, 0x1ab)), profile: p, total: total}
+	return pl
 }
 
-// Next возвращает следующий запрос.
+func weight(reqs []scenario.Request) int {
+	total := 0
+	for _, r := range reqs {
+		total += r.Weight
+	}
+	return total
+}
+
+// Next возвращает следующий запрос фона.
 func (p *Plan) Next() Req {
-	n := p.rng.IntN(p.total)
-	for _, r := range p.profile.Requests {
+	return pick(p.rng, p.profile.Requests, p.total)
+}
+
+// NextBurst возвращает следующий запрос залпа.
+func (p *Plan) NextBurst() Req {
+	return pick(p.burstRng, p.profile.Burst.Requests, p.burstTotal)
+}
+
+// burst возвращает размер залпа и промежуток между залпами в пределах каркаса; 0 — залпов нет.
+func (p *Plan) burst() (int, time.Duration) {
+	b := p.profile.Burst
+	if b == nil || p.burstTotal <= 0 || b.Size <= 0 {
+		return 0, 0
+	}
+	return min(b.Size, maxBurst), max(b.Every, minBurstEvery)
+}
+
+func pick(rng *rand.Rand, reqs []scenario.Request, total int) Req {
+	n := rng.IntN(total)
+	for _, r := range reqs {
 		if n >= r.Weight {
 			n -= r.Weight
 			continue
 		}
 		out := Req{Method: r.Method, Path: r.Path, Body: r.Body, Expected: r.Expected}
 		if len(r.IDs) > 0 {
-			id := strconv.Itoa(r.IDs[p.rng.IntN(len(r.IDs))])
+			id := strconv.Itoa(r.IDs[rng.IntN(len(r.IDs))])
 			out.Path = strings.ReplaceAll(out.Path, "{id}", id)
 			out.Body = strings.ReplaceAll(out.Body, "{id}", id)
 		}
@@ -139,6 +172,7 @@ func percentile(l []time.Duration, p int) time.Duration {
 
 // Run шлёт запросы с постоянной частотой, не дожидаясь ответов: зависший сервис
 // не должен замедлять нагрузку. Запрос, отправленный после отмены, не считается.
+// Залпы идут поверх фона и делят с ним предел одновременных запросов.
 func Run(ctx context.Context, rt http.RoundTripper, plan *Plan, rate int, rec *Recorder) scenario.Stats {
 	var (
 		mu  sync.Mutex
@@ -159,29 +193,42 @@ func Run(ctx context.Context, rt http.RoundTripper, plan *Plan, rate int, rec *R
 		lat = append(lat, d)
 	}
 	sem := make(chan struct{}, maxInflight)
-	tick := time.NewTicker(time.Second / time.Duration(rate))
+	fire := func(at time.Time, r Req) {
+		select {
+		case sem <- struct{}{}:
+		default:
+			note(at, requestTimeout, false)
+			return
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			start := time.Now()
+			ok := send(rt, r)
+			note(start, time.Since(start), ok)
+		}()
+	}
+	tick := time.NewTicker(time.Second / time.Duration(min(max(rate, 1), maxRate)))
 	defer tick.Stop()
+	var burstC <-chan time.Time // nil — ветка залпа не срабатывает
+	size, every := plan.burst()
+	if size > 0 {
+		bt := time.NewTicker(every)
+		defer bt.Stop()
+		burstC = bt.C
+	}
 loop:
 	for {
 		select {
 		case <-ctx.Done():
 			break loop
 		case at := <-tick.C:
-			r := plan.Next()
-			select {
-			case sem <- struct{}{}:
-			default:
-				note(at, requestTimeout, false)
-				continue
+			fire(at, plan.Next())
+		case at := <-burstC:
+			for range size {
+				fire(at, plan.NextBurst())
 			}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				defer func() { <-sem }()
-				start := time.Now()
-				ok := send(rt, r)
-				note(start, time.Since(start), ok)
-			}()
 		}
 	}
 	wg.Wait()
