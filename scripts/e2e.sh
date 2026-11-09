@@ -2,10 +2,12 @@
 # e2e на настоящих виртуалках по уровням, см. docs/adr/0008-e2e-levels.md.
 # Виртуалки идут строго по одной: параллельный прогон вешает машину.
 #
-#   e2e.sh changed [base]   то, что требует дифф от base (по умолчанию HEAD), — держит коммит
+#   e2e.sh changed [--full] [base]   то, что требует дифф от base (по умолчанию HEAD): контракт
+#                           и smoke изменённых сюжетов — держит коммит; --full — все случаи (CI)
 #   e2e.sh plan [base]      только показать, что выбрал бы changed
 #   e2e.sh contract         тесты каркаса: всё, кроме TestScenario
 #   e2e.sh scenario id ...  все случаи названных сюжетов
+#   e2e.sh case id случай   один случай сюжета, например после провала в CI
 #   e2e.sh smoke [--feature memory|rise] [id ...]   по два случая на сюжет
 #   e2e.sh all              всё
 #
@@ -70,6 +72,12 @@ scenario() {
   gotest "scenario-$(tr ' ' + <<<"$*")" -timeout 3h -run "$(run_regex "$@")"
 }
 
+one_case() { # id случай
+  guard
+  scripts/build-images.sh "$1"
+  gotest "case-$1" -timeout 1h -run "^TestScenario\$/^$1\$/^${2// /_}\$"
+}
+
 smoke() {
   local feature="" ids=()
   while [ $# -gt 0 ]; do
@@ -117,10 +125,11 @@ classify() {
   done < <(git diff --name-only "$base"; git ls-files --others --exclude-standard)
 }
 
-show_plan() {
+show_plan() { # base режим-сюжетов
   echo "дифф от $1:"
+  shift
   [ $need_contract = 0 ] || echo "  contract — правка каркаса или сюжета каркаса ($fw)"
-  [ ${#need_ids[@]} = 0 ] || echo "  scenario ${need_ids[*]} — правка сюжета"
+  [ ${#need_ids[@]} = 0 ] || echo "  $1 ${need_ids[*]} — правка сюжета"
   [ $need_base = 0 ] || echo "  smoke всех сюжетов до коммита — версии базового образа, ядра или Firecracker"
   [ $need_base = 1 ] || [ $need_contract = 0 ] || echo "  smoke всех сюжетов — в CI после пуша"
   [ ${#skipped[@]} = 0 ] || printf '  без e2e: %s\n' "${skipped[@]}"
@@ -129,22 +138,30 @@ show_plan() {
   fi
 }
 
+# Ложные починки — логика проверок сюжета: все случаи гоняет CI после пуша (--full), на
+# ноутбуке хватает smoke изменённых сюжетов, см. ADR 0011.
 changed() {
+  local full=0
+  if [ "${1:-}" = --full ]; then full=1; shift; fi
   local base=${1:-HEAD}
   classify "$base"
-  show_plan "$base"
+  if [ $full = 1 ]; then show_plan "$base" scenario; else show_plan "$base" smoke; fi
   [ $need_contract = 0 ] || contract
-  [ ${#need_ids[@]} = 0 ] || scenario "${need_ids[@]}"
-  [ $need_base = 0 ] || smoke
+  if [ ${#need_ids[@]} -gt 0 ]; then
+    if [ $full = 1 ]; then scenario "${need_ids[@]}"; else smoke "${need_ids[@]}"; fi
+  fi
+  # Правку каркаса, которая ломает чужой сюжет, видит только прогон всех сюжетов.
+  if [ $need_base = 1 ] || { [ $full = 1 ] && [ $need_contract = 1 ]; }; then smoke; fi
 }
 
 cmd=${1:-}; shift || true
 case $cmd in
   changed) changed "$@" ;;
-  plan) classify "${1:-HEAD}"; show_plan "${1:-HEAD}" ;;
+  plan) classify "${1:-HEAD}"; show_plan "${1:-HEAD}" smoke ;;
   contract) contract ;;
   scenario) [ $# -gt 0 ] || { echo "нужен id сюжета" >&2; exit 2; }; scenario "$@" ;;
+  case) [ $# = 2 ] || { echo "нужны id сюжета и название случая" >&2; exit 2; }; one_case "$@" ;;
   smoke) smoke "$@" ;;
   all) guard; scripts/build-images.sh; gotest all -timeout 6h ;;
-  *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

@@ -1,0 +1,79 @@
+# e2e на настоящих виртуалках, см. docs/adr/0011-e2e-in-ci.md.
+# Пуш: быстрые тесты и то, что требует дифф пуша, все случаи изменённых сюжетов.
+# Раз в неделю и по кнопке: всё, по задаче на сюжет.
+name: e2e
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  changed:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+      - name: Быстрые тесты
+        run: go test ./...
+      - name: e2e по диффу пуша
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          base=$BEFORE
+          git cat-file -e "$base^{commit}" 2>/dev/null || base=HEAD~1
+          scripts/e2e.sh changed --full "$base"
+      - name: Логи e2e
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-changed
+          path: .data/e2e/
+          if-no-files-found: ignore
+
+  list:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      ids: ${{ steps.ids.outputs.ids }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: ids
+        run: echo "ids=$( { echo contract; cd scenarios && ls -d */ | tr -d /; } | jq -Rnc '[inputs]')" >> "$GITHUB_OUTPUT"
+
+  all:
+    needs: list
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.list.outputs.ids) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: e2e ${{ matrix.target }}
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          if [ "$TARGET" = contract ]; then scripts/e2e.sh contract; else scripts/e2e.sh scenario "$TARGET"; fi
+      - name: Логи e2e
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-${{ matrix.target }}
+          path: .data/e2e/
+          if-no-files-found: ignore
