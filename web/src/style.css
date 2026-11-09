@@ -118,11 +118,12 @@ button:disabled { opacity: .5; cursor: default; }
 .view .dot-new { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--good); margin-left: 6px; vertical-align: 1px; }
 .pane-head .sep { width: 1px; align-self: stretch; margin: 6px 0; background: var(--line); flex: none; }
 .debrief-view { flex: 1; min-height: 0; overflow-y: auto; padding: 16px 24px 40px; }
-.debrief-banner { max-width: 78ch; margin: 0 0 16px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line);
+.debrief-banner { max-width: 205ch; margin: 0 0 16px; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line);
   border-left: 3px solid var(--good); background: var(--surface); color: var(--text-2); font-size: 13px; }
 .debrief-banner[data-kind="early"] { border-left-color: var(--warn); }
 .debrief-banner strong { color: var(--text); }
-.long { max-width: 78ch; font-size: 14.5px; line-height: 1.6; }
+/* 205ch — длинная строка шага 2 разбора failing-orders целиком, около 1660 px; решение пользователя 09.11 */
+.long { max-width: 205ch; font-size: 14.5px; line-height: 1.6; }
 .long h1 { font-size: 22px; margin: 0 0 16px; }
 .long h2 { font-size: 17px; margin: 28px 0 10px; padding-top: 4px; }
 .long h3 { font-size: 14.5px; margin: 18px 0 6px; }

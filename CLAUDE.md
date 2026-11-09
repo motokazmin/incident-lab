@@ -3,7 +3,7 @@
 Браузерный полигон инцидентов для бэкенд-инженеров: живой сервис под нагрузкой с настоящей поломкой, настоящие
 инструменты, проверка починки по поведению системы, разбор после решения. Запуск сразу в браузере, без установки у пользователя.
 
-Карта — [docs/architecture.md](docs/architecture.md), состояние — [docs/state.md](docs/state.md), решения — [docs/adr/](docs/adr/), план — [docs/plan.md](docs/plan.md), каталог сценариев — [docs/scenarios.md](docs/scenarios.md).
+Карта — [docs/architecture.md](docs/architecture.md), состояние — [docs/state.md](docs/state.md), решения — [docs/adr/](docs/adr/), план — [docs/plan.md](docs/plan.md), каталог сценариев — [docs/scenarios.md](docs/scenarios.md), правила разбора полётов — [docs/debrief-guide.md](docs/debrief-guide.md).
 
 ## Команды
 
