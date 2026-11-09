@@ -86,8 +86,24 @@ func waitState(t *testing.T, l *lab.Lab, d time.Duration, want ...string) lab.Vi
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	t.Fatalf("нет состояния %v за %s: %s, %+v", want, d, l.View().State, l.View().Events)
+	t.Fatalf("нет состояния %v за %s: %s, %+v\nнагрузка за минуту, по 10 с:\n%s", want, d, l.View().State, l.View().Events, loadDigest(l))
 	return lab.View{}
+}
+
+// loadDigest сводит метрики нагрузки за последнюю минуту по 10 с: без них провал ожидания
+// алерта не объяснить по логу CI.
+func loadDigest(l *lab.Lab) string {
+	var b strings.Builder
+	samples := l.Metrics(time.Now().Add(-time.Minute).Unix())
+	for i := 0; i < len(samples); i += 10 {
+		sent, failed, p95 := 0, 0, []int{}
+		for _, s := range samples[i:min(i+10, len(samples))] {
+			sent, failed = sent+s.Sent, failed+s.Failed
+			p95 = append(p95, s.P95Ms)
+		}
+		fmt.Fprintf(&b, "  отправлено %d, ошибок %d, p95 по секундам %v мс\n", sent, failed, p95)
+	}
+	return b.String()
 }
 
 // shell выполняет команду в терминале стенда и возвращает весь вывод с эхом.
