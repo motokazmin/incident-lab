@@ -1,21 +1,28 @@
 # e2e на настоящих виртуалках, см. docs/adr/0011-e2e-in-ci.md.
-# Пуш: быстрые тесты и то, что требует дифф пуша, все случаи изменённых сюжетов.
-# Раз в неделю и по кнопке: всё, по задаче на сюжет.
+# Пуш в любую ветку: быстрые тесты и то, что требует дифф (в main — от прошлого пуша, в ветке —
+# от main), все случаи изменённых сюжетов. Раз в неделю и по кнопке: всё, по задаче на сюжет;
+# кнопка с полем target гоняет один сюжет или контракт на выбранной ветке.
 name: e2e
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]
   schedule:
     - cron: "0 3 * * 1"
   workflow_dispatch:
+    inputs:
+      target:
+        description: "id сюжета или contract; пусто — всё"
+        required: false
+        default: ""
 
 permissions:
   contents: read
 
 concurrency:
   group: e2e-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: false
+  # Новый пуш в ветку отменяет прогон прежнего; в main каждый пуш досчитывается.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   changed:
@@ -33,8 +40,12 @@ jobs:
         env:
           BEFORE: ${{ github.event.before }}
         run: |
-          base=$BEFORE
-          git cat-file -e "$base^{commit}" 2>/dev/null || base=HEAD~1
+          if [ "$GITHUB_REF" = refs/heads/main ]; then
+            base=$BEFORE
+            git cat-file -e "$base^{commit}" 2>/dev/null || base=HEAD~1
+          else
+            base=$(git merge-base origin/main HEAD)
+          fi
           scripts/e2e.sh changed --full "$base"
       - name: Логи e2e
         if: always()
@@ -52,7 +63,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - id: ids
-        run: echo "ids=$( { echo contract; cd scenarios && ls -d */ | tr -d /; } | jq -Rnc '[inputs]')" >> "$GITHUB_OUTPUT"
+        env:
+          TARGET: ${{ inputs.target }}
+        run: |
+          all=$( { echo contract; cd scenarios && ls -d */ | tr -d /; } )
+          if [ -n "$TARGET" ]; then
+            grep -qxF -- "$TARGET" <<<"$all" || { echo "нет такого сюжета: $TARGET; есть: $(echo $all)"; exit 1; }
+            all=$TARGET
+          fi
+          echo "ids=$(jq -Rnc '[inputs]' <<<"$all")" >> "$GITHUB_OUTPUT"
 
   all:
     needs: list
