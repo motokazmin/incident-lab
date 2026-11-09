@@ -7,6 +7,12 @@ name: e2e
 on:
   push:
     branches: ["**"]
+    # Пуш только в документы не запускает ничего. Тексты сюжетов (scenarios/<id>/*.md) сюда
+    # не входят: их разбирают go test и e2e.
+    paths-ignore:
+      - "docs/**"
+      - "*.md"
+      - "LICENSE"
   schedule:
     - cron: "0 3 * * 1"
   workflow_dispatch:
