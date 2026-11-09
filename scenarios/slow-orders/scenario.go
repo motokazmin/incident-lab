@@ -49,22 +49,14 @@ const (
 	emptyCustomer         = 40000        // заказов нет
 )
 
-func ids(from, to int) []int {
-	out := make([]int, 0, to-from+1)
-	for i := from; i <= to; i++ {
-		out = append(out, i)
-	}
-	return out
-}
-
 func list(weight, from, to int) scenario.Request {
-	return scenario.Request{Weight: weight, Method: http.MethodGet, Path: "/customers/{id}/orders", IDs: ids(from, to)}
+	return scenario.Request{Weight: weight, Method: http.MethodGet, Path: "/customers/{id}/orders", IDs: scenario.IDs(from, to)}
 }
 
 func mix(rate, listWeight, from, to int) scenario.LoadProfile {
 	return scenario.LoadProfile{RatePerSec: rate, Requests: []scenario.Request{
-		{Weight: 100 - 20 - listWeight, Method: http.MethodGet, Path: "/products/{id}", IDs: ids(1, 200)},
-		{Weight: 20, Method: http.MethodPost, Path: "/orders", Body: `{"customer_id":{id},"product_id":{id},"qty":1}`, IDs: ids(buyerFirst, buyerLast)},
+		{Weight: 100 - 20 - listWeight, Method: http.MethodGet, Path: "/products/{id}", IDs: scenario.IDs(1, 200)},
+		{Weight: 20, Method: http.MethodPost, Path: "/orders", Body: `{"customer_id":{id},"product_id":{id},"qty":1}`, IDs: scenario.IDs(buyerFirst, buyerLast)},
 		list(listWeight, from, to),
 	}}
 }

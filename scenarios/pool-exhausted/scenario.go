@@ -35,21 +35,13 @@ const (
 	maxP95       = 500 * time.Millisecond
 )
 
-func ids(from, to int) []int {
-	out := make([]int, 0, to-from+1)
-	for i := from; i <= to; i++ {
-		out = append(out, i)
-	}
-	return out
-}
-
 func mix(rate int) scenario.LoadProfile {
 	return scenario.LoadProfile{RatePerSec: rate, Requests: []scenario.Request{
-		{Weight: 70, Method: http.MethodGet, Path: "/products/{id}", IDs: ids(1, 100)},
-		{Weight: 28, Method: http.MethodPost, Path: "/orders", Body: `{"product_id":{id},"qty":1}`, IDs: ids(1, 100)},
-		{Weight: 1, Method: http.MethodPost, Path: "/orders", Body: `{"product_id":{id},"qty":1}`, IDs: ids(198, 200), Expected: []int{http.StatusConflict}},
+		{Weight: 70, Method: http.MethodGet, Path: "/products/{id}", IDs: scenario.IDs(1, 100)},
+		{Weight: 28, Method: http.MethodPost, Path: "/orders", Body: `{"product_id":{id},"qty":1}`, IDs: scenario.IDs(1, 100)},
+		{Weight: 1, Method: http.MethodPost, Path: "/orders", Body: `{"product_id":{id},"qty":1}`, IDs: scenario.IDs(198, 200), Expected: []int{http.StatusConflict}},
 		// Отказ бывает и на обычном товаре: иначе ветку можно спрятать условием по id.
-		{Weight: 1, Method: http.MethodPost, Path: "/orders", Body: `{"product_id":{id},"qty":1000000}`, IDs: ids(101, 197), Expected: []int{http.StatusConflict}},
+		{Weight: 1, Method: http.MethodPost, Path: "/orders", Body: `{"product_id":{id},"qty":1000000}`, IDs: scenario.IDs(101, 197), Expected: []int{http.StatusConflict}},
 	}}
 }
 

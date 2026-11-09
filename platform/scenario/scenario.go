@@ -20,6 +20,15 @@ type Request struct {
 	Expected []int
 }
 
+// IDs возвращает id от from до to включительно, для Request.IDs.
+func IDs(from, to int) []int {
+	out := make([]int, 0, max(to-from+1, 0))
+	for i := from; i <= to; i++ {
+		out = append(out, i)
+	}
+	return out
+}
+
 // LoadProfile описывает нагрузку. Последовательность запросов полностью
 // определяется сидом стенда.
 type LoadProfile struct {

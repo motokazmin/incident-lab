@@ -61,7 +61,7 @@ func slowLoad(ctx context.Context, env scenario.Env, d time.Duration) (scenario.
 		env.Action(c, "recs-normal")
 	}()
 	return env.RunLoad(ctx, scenario.LoadProfile{RatePerSec: slowRate, Requests: []scenario.Request{
-		{Weight: 1, Method: http.MethodGet, Path: "/products/{id}", IDs: ids(lastProduct+1, checkLast)},
+		{Weight: 1, Method: http.MethodGet, Path: "/products/{id}", IDs: scenario.IDs(lastProduct+1, checkLast)},
 	}}, d)
 }
 

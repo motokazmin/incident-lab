@@ -40,19 +40,11 @@ const (
 	maxStuck     = 3                      // горутин в коде сервиса после нагрузки и паузы
 )
 
-func ids(from, to int) []int {
-	out := make([]int, 0, to-from+1)
-	for i := from; i <= to; i++ {
-		out = append(out, i)
-	}
-	return out
-}
-
 // mix — карточки товаров; popular — доля в процентах популярных товаров, которые тормозят.
 func mix(rate, popular int) scenario.LoadProfile {
 	return scenario.LoadProfile{RatePerSec: rate, Requests: []scenario.Request{
-		{Weight: popular, Method: http.MethodGet, Path: "/products/{id}", IDs: ids(1, popularLast)},
-		{Weight: 100 - popular, Method: http.MethodGet, Path: "/products/{id}", IDs: ids(popularLast+1, lastProduct)},
+		{Weight: popular, Method: http.MethodGet, Path: "/products/{id}", IDs: scenario.IDs(1, popularLast)},
+		{Weight: 100 - popular, Method: http.MethodGet, Path: "/products/{id}", IDs: scenario.IDs(popularLast+1, lastProduct)},
 	}}
 }
 
