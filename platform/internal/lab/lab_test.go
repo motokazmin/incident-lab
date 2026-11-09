@@ -347,6 +347,86 @@ func TestHintsOpenInOrder(t *testing.T) {
 	}
 }
 
+// Последняя подсказка открывает разбор до успеха, и это видно в снимке и журнале.
+func TestLastHintOpensDebrief(t *testing.T) {
+	var runs atomic.Int32
+	sc := testScenario(scenario.Check{Name: "c", Run: func(context.Context, scenario.Env) scenario.Result {
+		return scenario.Result{Pass: runs.Add(1) > 1}
+	}})
+	sc.Hints = []scenario.Hint{{Title: "1", Text: "первая"}, {Title: "2", Text: "вторая"}}
+	m := NewManager(&fakeProvider{}, []scenario.Scenario{sc}, Limits{MaxLabs: 1, MaxLifetime: time.Minute, IdleTimeout: time.Minute})
+	l, err := m.Start("s", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "healthy", state(l, StateHealthy))
+	if err := l.Verify(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "неудачная проверка", func() bool { return l.View().Report != nil && l.View().State == StateHealthy })
+	if err := l.OpenHint(1); err != nil {
+		t.Fatal(err)
+	}
+	if v := l.View(); v.Debrief != "" || v.Early {
+		t.Fatalf("разбор открыт не последней подсказкой: %+v", v)
+	}
+	if err := l.OpenHint(2); err != nil {
+		t.Fatal(err)
+	}
+	v := l.View()
+	if v.Debrief == "" || !v.Early || v.Solved != nil {
+		t.Fatalf("после последней подсказки: debrief=%q early=%v solved=%v", v.Debrief, v.Early, v.Solved)
+	}
+	n := 0
+	for _, e := range v.Events {
+		if e.Kind == "debrief" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("в журнале %d записей об открытии разбора", n)
+	}
+	if err := l.Verify(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "resolved", state(l, StateResolved))
+	if v := l.View(); !v.Early || v.Solved == nil {
+		t.Fatalf("после успеха отметка пропала: early=%v solved=%v", v.Early, v.Solved)
+	}
+}
+
+// Заработанный разбор не закрывается проваленной повторной проверкой, время успеха не сдвигается.
+func TestDebriefStaysAfterFailedRecheck(t *testing.T) {
+	var runs atomic.Int32
+	m := newManager(&fakeProvider{}, scenario.Check{Name: "c", Run: func(context.Context, scenario.Env) scenario.Result {
+		return scenario.Result{Pass: runs.Add(1) == 1}
+	}}, 1)
+	l, err := m.Start("s", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "healthy", state(l, StateHealthy))
+	if err := l.Verify(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "resolved", state(l, StateResolved))
+	first := l.View()
+	if first.Solved == nil || first.Early {
+		t.Fatalf("после успеха: solved=%v early=%v", first.Solved, first.Early)
+	}
+	if err := l.Verify(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "повтор провален", state(l, StateAlert))
+	v := l.View()
+	if v.Debrief == "" {
+		t.Fatal("разбор закрылся после проваленного повтора")
+	}
+	if !v.Solved.Equal(*first.Solved) {
+		t.Fatalf("время успеха сдвинулось: %v → %v", first.Solved, v.Solved)
+	}
+}
+
 func TestAlertReason(t *testing.T) {
 	second := func(sent, failed, p95 int) load.Sample { return load.Sample{Sent: sent, Failed: failed, P95Ms: p95} }
 	both := scenario.Alert{MinErrorRate: 0.2, MaxP95: 500 * time.Millisecond}

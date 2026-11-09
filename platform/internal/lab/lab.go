@@ -80,6 +80,8 @@ type View struct {
 	Title    string           `json:"title"`
 	Briefing string           `json:"briefing"`
 	Debrief  string           `json:"debrief,omitempty"`
+	Early    bool             `json:"debriefEarly"`     // разбор открыт до успешной проверки
+	Solved   *time.Time       `json:"solved,omitempty"` // первая успешная проверка
 	State    string           `json:"state"`
 	Seed     uint64           `json:"seed,string"`
 	Created  time.Time        `json:"created"`
@@ -108,7 +110,10 @@ type Lab struct {
 	events   []Event
 	report   *verifier.Report
 	attempts uint64
-	hints    int // сколько подсказок открыто
+	hints    int       // сколько подсказок открыто
+	debrief  bool      // разбор открыт; обратно не закрывается
+	early    bool      // разбор открыт подсказками до успеха
+	solved   time.Time // первая успешная проверка
 	stopLoad func()
 	ctx      context.Context // живёт, пока жив стенд
 	cancel   context.CancelFunc
@@ -373,7 +378,8 @@ func (m *Manager) Stop(id string) error {
 	return nil
 }
 
-// View возвращает снимок стенда. Разбор виден только после успешной проверки.
+// View возвращает снимок стенда. Разбор виден после успешной проверки или когда открыты
+// все подсказки, и с тех пор не закрывается.
 func (l *Lab) View() View {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -383,8 +389,12 @@ func (l *Lab) View() View {
 	for _, h := range l.sc.Hints[:l.hints] {
 		v.Hints = append(v.Hints, Hint{Title: h.Title, Text: h.Text})
 	}
-	if l.state == StateResolved {
-		v.Debrief = l.sc.Debrief
+	if l.debrief {
+		v.Debrief, v.Early = l.sc.Debrief, l.early
+	}
+	if !l.solved.IsZero() {
+		at := l.solved
+		v.Solved = &at
 	}
 	return v
 }
@@ -399,13 +409,20 @@ func (l *Lab) OpenHint(n int) error {
 		return ErrBusy
 	}
 	opened := n == l.hints+1 && n <= len(l.sc.Hints)
+	total := len(l.sc.Hints)
+	debrief := opened && n == total && !l.debrief
 	if opened {
 		l.hints = n
 	}
-	total := len(l.sc.Hints)
+	if debrief {
+		l.debrief, l.early = true, true
+	}
 	l.mu.Unlock()
 	if opened {
 		l.event("hint", fmt.Sprintf("Открыта подсказка %d из %d", n, total))
+	}
+	if debrief {
+		l.event("debrief", "Открыт разбор полётов до успешной проверки")
 	}
 	return nil
 }
@@ -500,6 +517,12 @@ func (l *Lab) Verify() error {
 		l.mu.Lock()
 		l.report = &rep
 		l.state = next
+		if rep.Passed {
+			l.debrief = true
+			if l.solved.IsZero() {
+				l.solved = time.Now()
+			}
+		}
 		l.mu.Unlock()
 		l.event("verify", text)
 	}()

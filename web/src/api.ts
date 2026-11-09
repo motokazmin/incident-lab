@@ -3,7 +3,7 @@ export interface Item { name: string; pass: boolean; detail: string; hint?: stri
 export interface Hint { title: string; text: string }
 export interface Report { passed: boolean; items: Item[]; finished: string }
 export interface LabView {
-  id: string; scenario: string; title: string; briefing: string; debrief?: string;
+  id: string; scenario: string; title: string; briefing: string; debrief?: string; debriefEarly: boolean; solved?: string;
   state: "booting" | "healthy" | "alert" | "verifying" | "resolved" | "ended";
   seed: string; created: string; events: Event[]; report?: Report;
   hints: Hint[]; hintsTotal: number; alertText: string; fixHow: string[];

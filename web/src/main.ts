@@ -1,7 +1,9 @@
 import "./style.css";
 import * as api from "./api";
 import { Chart, type Marker } from "./chart";
+import { Debrief } from "./debrief";
 import { h, inline, markdown } from "./dom";
+import type { Editor } from "./editor";
 
 const app = document.getElementById("app")!;
 const labFromHash = () => new URLSearchParams(location.hash.slice(1)).get("lab");
@@ -19,7 +21,7 @@ function nowHint(v: api.LabView): { title: string; text: string } {
   switch (v.state) {
     case "booting": return { title: "Запускаем стенд", text: "Поднимаем учебный сервер и сервис. Это несколько секунд." };
     case "verifying": return { title: "Идёт проверка", text: "Нагружаем сервис и сверяем данные. Это может занять пару минут." };
-    case "resolved": return { title: "Инцидент закрыт", text: "Починка выдержала проверку. Ниже разбор: что сломалось и как это находить." };
+    case "resolved": return { title: "Инцидент закрыт", text: "Починка выдержала проверку. Разбор открыт справа, во вкладке «Разбор полётов» над редактором." };
     case "ended": return { title: "Стенд остановлен", text: "Он закрывается, если долго нет активности. Вернись к списку задач и начни заново." };
     case "alert": return failed
       ? retry(v)
@@ -68,13 +70,18 @@ class LabScreen {
   private readonly side = h("div", { class: "side-body" });
   private readonly report = h("div", {});
   private readonly events = h("ol", { class: "events" });
-  private readonly debrief = h("div", {});
+  private readonly debrief = new Debrief();
+  private editor?: Editor;
+  private showDebrief = false; // проверка прошла до того, как открылся редактор
   private readonly hintList = h("div", { class: "hint-list" });
   private readonly hintBtn = h("button", { class: "ghost", click: () => void this.openHint() });
+  private readonly hintsDone = h("div", { class: "debrief-link", hidden: true },
+    h("p", { class: "muted" }, "Подсказки кончились, открыт разбор полётов. Почини по нему и проверь: так путь запомнится."),
+    h("button", { class: "ghost", click: () => this.editor?.show(true) }, "Открыть разбор полётов"));
   private readonly hintBox = h("section", { class: "hints", hidden: true },
     h("h2", { class: "section" }, "Подсказки"),
     h("p", { class: "muted" }, "Застрял? Открывай по одной: от того, куда смотреть, до готовой правки."),
-    this.hintList, this.hintBtn);
+    this.hintList, this.hintBtn, this.hintsDone);
   private readonly errors = new Chart("Ошибки", "Доля запросов клиентов, закончившихся ошибкой", (s) => (s.sent ? (s.failed / s.sent) * 100 : 0), (v) => `${v.toFixed(0)}%`, 100);
   private readonly latency = new Chart("Время ответа", "95% запросов укладываются в это время (p95)", (s) => s.p95ms, (v) => `${Math.round(v)} мс`);
   private rows: api.Sample[] = [];
@@ -89,7 +96,7 @@ class LabScreen {
   async run() {
     const v = await api.getLab(this.id);
     this.side.append(
-      this.now, this.report, this.debrief, this.hintBox,
+      this.now, this.report, this.hintBox,
       h("section", {}, h("h2", { class: "section" }, "Задача"), markdown(v.briefing)),
       h("section", {}, h("h2", { class: "section" }, "Как пройти"), h("ol", { class: "how" },
         h("li", {}, "Найди причину: смотри графики и логи."),
@@ -135,11 +142,13 @@ class LabScreen {
   private async openWorkspace() {
     this.workspace = true;
     const [{ Editor }, { Shell }] = await Promise.all([import("./editor"), import("./terminal")]);
-    const editor = new Editor(this.id);
+    const editor = new Editor(this.id, this.debrief);
     const shell = new Shell(this.id);
     document.getElementById("work")!.replaceChildren(editor.el, shell.el);
     await editor.mount();
     shell.mount();
+    this.editor = editor;
+    if (this.showDebrief) editor.show(true);
   }
 
   private render(v: api.LabView) {
@@ -164,14 +173,16 @@ class LabScreen {
     if (v.report) {
       this.report.replaceChildren(h("section", { class: "report" },
         h("h3", {}, v.report.passed ? "Проверка пройдена" : "Проверка не пройдена"),
+        v.report.passed && v.debriefEarly ? h("p", { class: "early" }, "Разбор был открыт до успешной проверки") : null,
         h("ul", {}, ...v.report.items.map((i) => h("li", {},
           h("span", { class: i.pass ? "ok" : "bad" }, i.pass ? "✓ " : "✕ "),
           h("span", {}, i.name), h("small", { class: "muted" }, i.detail),
-          i.hint ? h("p", { class: "check-hint" }, ...inline(i.hint)) : null)))));
+          i.hint ? h("p", { class: "check-hint" }, ...inline(i.hint)) : null))),
+        v.report.passed ? h("button", { class: "ghost", click: () => this.editor?.show(true) }, "Открыть разбор полётов") : null));
     }
-    if (v.debrief && !this.debrief.childElementCount) {
-      this.debrief.replaceChildren(h("section", { class: "debrief" }, h("h3", {}, "Разбор"), markdown(v.debrief),
-        v.hintsTotal ? h("p", { class: "muted" }, `Подсказок использовано: ${v.hints.length} из ${v.hintsTotal}`) : null));
+    if (this.debrief.update(v)) {
+      this.showDebrief = true;
+      this.editor?.show(true);
     }
     this.renderHints(v);
     if (v.state === "ended") {
@@ -188,6 +199,7 @@ class LabScreen {
       this.hintList.append(h("article", {}, h("h3", {}, `${n}. ${hint.title}`), markdown(hint.text)));
     }
     this.hintsOpen = v.hints.length;
+    this.hintsDone.hidden = !v.debriefEarly || v.state === "resolved";
     const locked = v.state === "booting" || v.state === "resolved" || v.state === "ended";
     this.hintBtn.hidden = locked || v.hints.length >= v.hintsTotal;
     const waiting = v.state !== "alert" && !v.report;

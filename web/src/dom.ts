@@ -1,3 +1,6 @@
+import DOMPurify from "dompurify";
+import { marked } from "marked";
+
 type Attrs = Record<string, string | boolean | ((e: Event) => void)>;
 
 /** Создаёт элемент. Текст вставляется только как текст: данные из песочницы не станут разметкой. */
@@ -22,18 +25,15 @@ export function inline(text: string): (Node | string)[] {
   });
 }
 
-/** Абзацы, списки, блоки кода, `код` и **жирный**. Хватает для брифинга, разбора и подсказок. */
+/** Markdown текстов сюжета: брифинг, подсказки, разбор. Тексты из репозитория, а не из песочницы;
+ *  HTML всё равно проходит через DOMPurify. Таблицы обёрнуты ради горизонтальной прокрутки. */
 export function markdown(src: string): HTMLElement {
   const root = h("div", { class: "prose" });
-  for (const block of src.trim().split(/\n\n+/)) {
-    const lines = block.split("\n");
-    if (lines[0] === "```" && lines[lines.length - 1] === "```") {
-      root.append(h("pre", {}, h("code", {}, lines.slice(1, -1).join("\n"))));
-    } else if (lines.every((l) => l.startsWith("- "))) {
-      root.append(h("ul", {}, ...lines.map((l) => h("li", {}, ...inline(l.slice(2))))));
-    } else {
-      root.append(h("p", {}, ...inline(block)));
-    }
-  }
+  root.innerHTML = DOMPurify.sanitize(marked.parse(src, { async: false }));
+  root.querySelectorAll("table").forEach((t) => {
+    const wrap = h("div", { class: "table" });
+    t.replaceWith(wrap);
+    wrap.append(t);
+  });
   return root;
 }
