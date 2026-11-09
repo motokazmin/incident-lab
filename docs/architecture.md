@@ -29,7 +29,7 @@ scenarios/<id>/
 
 Сборка: `scripts/build-images.sh [id]`. Проверка: `TestContract` без виртуалок, на настоящих — `scripts/e2e.sh changed`, уровни в [ADR 0008](adr/0008-e2e-levels.md). Контракт каркаса — e2e, кроме `TestScenario`, на сюжетах `fwPlain` и `fwMemory`: `TestServiceExit`, `TestSvcRestart`, `TestSvcDeploy`, `TestServiceOOM`, `TestServiceCgroup`, `TestTerminalSignals`, `TestOrphansReaped`, `TestLogColors`, `TestPipeline`. Сервер и e2e берут конфигурацию песочницы из `firecracker.Defaults`. `lab-setup` не даёт сюжету подменить общее действие.
 
-Сюжеты сейчас: `pool-exhausted`, `slow-orders`, `keeps-restarting`. У `keeps-restarting` есть второй процесс — заглушка чужого сервиса рекомендаций в `recs/`, бинарник `/opt/ml/recs` вне `/srv/app`, его запускает `boot` сюжета. `Scenario.Rise` поднимает нагрузку по расписанию, см. [ADR 0006](adr/0006-traffic-reveals-the-fault.md).
+Сюжеты сейчас: `pool-exhausted`, `slow-orders`, `keeps-restarting`, `failing-orders`. У `keeps-restarting` есть второй процесс — заглушка чужого сервиса рекомендаций в `recs/`, бинарник `/opt/ml/recs` вне `/srv/app`, его запускает `boot` сюжета. `Scenario.Rise` поднимает нагрузку по расписанию, см. [ADR 0006](adr/0006-traffic-reveals-the-fault.md). `LoadProfile.Burst` добавляет поверх фона залпы одновременных запросов, пределы размера и частоты у каркаса, см. [ADR 0010](adr/0010-load-bursts.md); пользуется `failing-orders`.
 
 ## Основные сущности
 

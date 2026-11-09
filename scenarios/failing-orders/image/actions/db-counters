@@ -1,0 +1,4 @@
+#!/bin/sh
+# Дедлоки, откаты транзакций, время сброса статистики базы shop и обновления строк товаров.
+# -X и pg_catalog: .psqlrc и одноимённое представление в public не подменят ответ.
+psql -X -U postgres -d shop -Atc "SELECT d.deadlocks, d.xact_rollback, coalesce(extract(epoch FROM d.stats_reset)::bigint, 0), t.n_tup_upd FROM pg_catalog.pg_stat_database d, pg_catalog.pg_stat_user_tables t WHERE d.datname = 'shop' AND t.schemaname = 'public' AND t.relname = 'products'"
