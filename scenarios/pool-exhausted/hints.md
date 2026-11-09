@@ -18,6 +18,8 @@
 psql -U postgres -d shop -c "select state, count(*) from pg_stat_activity where datname='shop' group by 1"
 ```
 
+В каком состоянии большинство сессий? Несколько `active` могут не работать, а ждать блокировку, одна из них — сам `psql`.
+
 ## Что делают эти сессии
 
 Состояние `idle in transaction` значит, что транзакция открыта, но ничего не делает. Посмотри её последний запрос:

@@ -11,10 +11,16 @@
 Выполни `curl localhost:8080/debug/dbstats` и сравни `in_use` с `max_open`. Если пул занят, посмотри, чем именно занята база:
 
 ```
-psql -U postgres -d shop -c "select state, left(query, 100) from pg_stat_activity where datname='shop' and state='active'"
+psql -U postgres -d shop -c "select wait_event_type, wait_event, left(query, 80) from pg_stat_activity where datname='shop' and state='active'"
 ```
 
-Сессии `active`, то есть работают, а не простаивают в открытой транзакции. Какой запрос выполняют почти все?
+Какой запрос выполняют почти все? Колонки `wait_event` говорят, чего сессия ждёт: `Lock` — блокировку, `IO` — диск, пусто — ничего не ждёт, а считает на процессоре. Тогда посмотри, сколько процессора осталось:
+
+```
+top -b -n1 | head -15
+```
+
+Пул только показывает очередь, а кончиться может то, что за ним.
 
 ## Почему запрос дорогой
 
@@ -34,7 +40,7 @@ psql -U postgres -d shop -c "explain analyze select * from orders where customer
 psql -U postgres -d shop -c "\d orders"
 ```
 
-Индексы перечислены внизу вывода. Есть ли способ сразу найти заказы одного покупателя?
+Индексы перечислены в разделе `Indexes`. Есть ли способ сразу найти заказы одного покупателя?
 
 ## Какой индекс нужен
 
@@ -46,4 +52,4 @@ psql -U postgres -d shop -c "\d orders"
 psql -U postgres -d shop -c "create index concurrently orders_customer_created on orders (customer_id, created_at desc)"
 ```
 
-`concurrently` не блокирует запись на время сборки. Под нагрузкой сборка занимает десятки секунд, дождись ответа `CREATE INDEX` и только потом запускай проверку. `svc deploy` не нужен: новый план подхватится сразу. Если команда ответила `already exists`, прошлая сборка прервалась, и индекс остался нерабочим (`INVALID` в `\d orders`): удали его через `drop index orders_customer_created` и повтори. Нажми «Проверить починку».
+`concurrently` не блокирует запись на время сборки. Под нагрузкой сборка занимает десятки секунд, дождись ответа `CREATE INDEX` и только потом запускай проверку. `svc deploy` не нужен: новый план подхватится сразу. Если команда ответила `already exists`, посмотри `\d orders`: с пометкой `INVALID` прошлая сборка прервалась, и индекс нерабочий — удали его через `drop index concurrently orders_customer_created` и повтори; без пометки индекс уже готов. Нажми «Проверить починку».
