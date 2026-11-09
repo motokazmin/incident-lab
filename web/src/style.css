@@ -64,8 +64,11 @@ button:disabled { opacity: .5; cursor: default; }
 .monaco { flex: 1; min-height: 0; }
 .terminal { border-top: 1px solid var(--line); background: #111110; }
 .terminal .pane-head span { font-size: 12px; }
-.term-host { flex: 1; min-height: 0; padding: 6px 0 0 8px; }
-.term-host .xterm { height: 100%; }
+/* Отступ — у .xterm, не у .term-host: FitAddon считает строки по высоте родителя вместе с его
+   padding и вычитает только padding самого .xterm. Иначе экран выходит за окно на высоту отступа,
+   у страницы мигает полоса прокрутки, раскладка прыгает по кругу и текст двоится. */
+.term-host { flex: 1; min-height: 0; }
+.term-host .xterm { height: 100%; padding: 6px 0 0 8px; }
 
 .chart { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; position: relative; }
 .chart figcaption { display: flex; justify-content: space-between; color: var(--text-2); font-size: 12.5px; }

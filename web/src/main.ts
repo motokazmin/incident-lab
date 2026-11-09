@@ -34,7 +34,9 @@ function nowHint(v: api.LabView): { title: string; text: string } {
 
 async function landing(error = "") {
   const list = await api.scenarios();
+  // Пока стенд создаётся, кнопки закрыты: повторный клик поднял бы второй стенд.
   const start = async (id: string) => {
+    document.querySelectorAll<HTMLButtonElement>(".card button").forEach((b) => { b.disabled = true; });
     try {
       const v = await api.startLab(id);
       location.hash = `lab=${v.id}`;
