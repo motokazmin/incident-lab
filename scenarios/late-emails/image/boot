@@ -1,0 +1,12 @@
+#!/bin/sh
+# Запускается агентом при старте песочницы. Завершается, когда сервис отвечает.
+set -e
+mkdir -p /var/log/mail
+setsid sh -c 'while :; do /opt/mail/mail >>/var/log/mail/mail.log 2>&1; sleep 0.2; done' </dev/null >/dev/null 2>&1 &
+lab-pg-start
+i=0
+until curl -fsS -o /dev/null "http://127.0.0.1:9025/stats"; do
+    i=$((i+1)); [ $i -gt 100 ] && exit 1
+    sleep 0.1
+done
+lab-service-start

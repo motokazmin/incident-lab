@@ -29,7 +29,10 @@ func TestContract(t *testing.T) {
 					t.Error("у подъёма нагрузки нет срока")
 				}
 			}
-			checkAlert(t, sc.Alert)
+			checkAlert(t, sc.Alert, sc.Lag)
+			if sc.Lag != nil {
+				checkAction(t, sc.ID, sc.Lag.Action)
+			}
 			checkChecks(t, sc)
 			checkRepairs(t, sc)
 			checkReference(t, sc)
@@ -46,6 +49,18 @@ func checkActions(t *testing.T, id string) {
 			t.Errorf("действие %s есть и в каркасе (platform/guest/actions)", e.Name())
 		}
 	}
+}
+
+// Действие, которое зовёт каркас, лежит у сюжета или в каркасе: опечатка иначе молча
+// оставила бы график пустым, а алерт — без замеров.
+func checkAction(t *testing.T, id, name string) {
+	t.Helper()
+	for _, dir := range []string{filepath.Join(id, "image/actions"), "../platform/guest/actions"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			return
+		}
+	}
+	t.Errorf("нет действия %s", name)
 }
 
 func checkFiles(t *testing.T, id string) {
@@ -101,10 +116,16 @@ func checkRequests(t *testing.T, reqs []scenario.Request) {
 	}
 }
 
-func checkAlert(t *testing.T, a scenario.Alert) {
+func checkAlert(t *testing.T, a scenario.Alert, lag *scenario.Lag) {
 	t.Helper()
-	if a.MinErrorRate <= 0 && a.MaxP95 <= 0 {
+	if a.MinErrorRate <= 0 && a.MaxP95 <= 0 && a.MaxLag <= 0 {
 		t.Error("у алерта нет порога: инцидент никогда не начнётся")
+	}
+	if a.MaxLag > 0 && lag == nil {
+		t.Error("порог отставания без Lag: замеров не будет, алерт не поднимется")
+	}
+	if lag != nil && (lag.Action == "" || lag.Title == "") {
+		t.Error("у Lag нет действия или подписи графика")
 	}
 	if a.Text == "" {
 		t.Error("у алерта нет текста")

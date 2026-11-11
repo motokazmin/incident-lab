@@ -29,7 +29,7 @@ scenarios/<id>/
 
 Сборка: `scripts/build-images.sh [id]`. Проверка: `TestContract` без виртуалок, на настоящих — `scripts/e2e.sh changed`, после пуша — `.github/workflows/e2e.yml` ([ADR 0011](adr/0011-e2e-in-ci.md)), уровни в [ADR 0008](adr/0008-e2e-levels.md). Контракт каркаса — e2e, кроме `TestScenario`, на сюжетах `fwPlain` и `fwMemory`: `TestServiceExit`, `TestSvcRestart`, `TestSvcDeploy`, `TestServiceOOM`, `TestServiceCgroup`, `TestTerminalSignals`, `TestOrphansReaped`, `TestLogColors`, `TestPipeline`. Сервер и e2e берут конфигурацию песочницы из `firecracker.Defaults`. `lab-setup` не даёт сюжету подменить общее действие.
 
-Сюжеты сейчас: `pool-exhausted`, `slow-orders`, `keeps-restarting`, `failing-orders`. У `keeps-restarting` есть второй процесс — заглушка чужого сервиса рекомендаций в `recs/`, бинарник `/opt/ml/recs` вне `/srv/app`, его запускает `boot` сюжета. `Scenario.Rise` поднимает нагрузку по расписанию, см. [ADR 0006](adr/0006-traffic-reveals-the-fault.md). `LoadProfile.Burst` добавляет поверх фона залпы одновременных запросов, пределы размера и частоты у каркаса, см. [ADR 0010](adr/0010-load-bursts.md); пользуется `failing-orders`.
+Сюжеты сейчас: `pool-exhausted`, `slow-orders`, `keeps-restarting`, `failing-orders`. У `keeps-restarting` есть второй процесс — заглушка чужого сервиса рекомендаций в `recs/`, бинарник `/opt/ml/recs` вне `/srv/app`, его запускает `boot` сюжета. `Scenario.Rise` поднимает нагрузку по расписанию, см. [ADR 0006](adr/0006-traffic-reveals-the-fault.md). `LoadProfile.Burst` добавляет поверх фона залпы одновременных запросов, пределы размера и частоты у каркаса, см. [ADR 0010](adr/0010-load-bursts.md); пользуется `failing-orders`. `Scenario.Lag` даёт алерт и третий график по отставанию фоновой работы, которого не видно в HTTP: каркас раз в 2 с вызывает действие сюжета, оно печатает секунды, порог — `Alert.MaxLag`, см. [ADR 0013](adr/0013-lag-metric.md).
 
 ## Основные сущности
 
@@ -53,7 +53,7 @@ scenarios/<id>/
                                  └─ Load, Verifier (снаружи)             └─ 1026 терминал
 ```
 
-Графики и алерт строятся из того, что нагрузка измерила снаружи. Из песочницы в браузер попадают только текст терминала и файлы в редакторе, оба показываются как текст. Проверка — обратная связь, а не доказательство, см. [ADR 0004](adr/0004-verification-is-feedback.md).
+Графики и алерт строятся из того, что нагрузка измерила снаружи; исключение — отставание `Scenario.Lag`, его печатает действие в госте, и оно годится только для алерта и графика. Из песочницы в браузер попадают только текст терминала и файлы в редакторе, оба показываются как текст. Проверка — обратная связь, а не доказательство, см. [ADR 0004](adr/0004-verification-is-feedback.md).
 
 ## Запуск стенда
 

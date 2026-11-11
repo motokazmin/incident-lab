@@ -6,9 +6,9 @@ export interface LabView {
   id: string; scenario: string; title: string; briefing: string; debrief?: string; debriefEarly: boolean; solved?: string;
   state: "booting" | "healthy" | "alert" | "verifying" | "resolved" | "ended";
   seed: string; created: string; events: Event[]; report?: Report;
-  hints: Hint[]; hintsTotal: number; alertText: string; fixHow: string[];
+  hints: Hint[]; hintsTotal: number; alertText: string; fixHow: string[]; lagTitle?: string;
 }
-export interface Sample { t: number; sent: number; failed: number; p50ms: number; p95ms: number }
+export interface Sample { t: number; sent: number; failed: number; p50ms: number; p95ms: number; lagms?: number }
 
 async function call(path: string, init?: RequestInit): Promise<Response> {
   const r = await fetch(path, init);

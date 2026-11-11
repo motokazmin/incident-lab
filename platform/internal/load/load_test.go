@@ -188,3 +188,22 @@ func TestRateIsCapped(t *testing.T) {
 		}
 	}
 }
+
+// Замер отставания попадает в свою секунду и не считается запросом: иначе он испортил бы
+// график ошибок и порог по доле ошибок.
+func TestLagIsNotARequest(t *testing.T) {
+	rec := &Recorder{}
+	at := time.Unix(1000, 0)
+	rec.AddLag(at, 1500*time.Millisecond)
+	rec.add(at.Add(time.Second), 10*time.Millisecond, true)
+	got := rec.Since(0, at.Add(5*time.Second))
+	if len(got) != 2 {
+		t.Fatalf("%+v", got)
+	}
+	if got[0].Sent != 0 || got[0].LagMs == nil || *got[0].LagMs != 1500 {
+		t.Fatalf("секунда замера: %+v", got[0])
+	}
+	if got[1].Sent != 1 || got[1].LagMs != nil {
+		t.Fatalf("секунда запроса без замера: %+v", got[1])
+	}
+}

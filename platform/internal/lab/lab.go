@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -40,6 +42,8 @@ const (
 	alertWindow = 10 // секунд
 	maxResponse = 64 << 10
 	maxEvents   = 500
+	lagTimeout  = 3 * time.Second // предел одного опроса
+	maxLag      = 24 * time.Hour  // больше — вывод из песочницы не принимается
 )
 
 // ErrLimit — достигнут предел одновременных стендов.
@@ -91,6 +95,7 @@ type View struct {
 	HintsAll int              `json:"hintsTotal"`
 	Alert    string           `json:"alertText"`
 	FixHow   []string         `json:"fixHow"`
+	LagTitle string           `json:"lagTitle,omitempty"` // пусто — графика отставания нет
 }
 
 // Lab — запущенный стенд.
@@ -275,9 +280,48 @@ func (l *Lab) startLoad(ctx context.Context, seed uint64, quiet bool) {
 		}
 		load.Run(ctx, l.rt, load.NewPlan(seed, p), p.RatePerSec, l.rec)
 	}()
+	lagDone := make(chan struct{})
+	go func() {
+		defer close(lagDone)
+		if l.sc.Lag != nil {
+			pollLag(ctx, l.sc.Lag.Action, l.api.Action, l.rec)
+		}
+	}()
 	l.mu.Lock()
-	l.stopLoad = func() { cancel(); <-done }
+	l.stopLoad = func() { cancel(); <-done; <-lagDone }
 	l.mu.Unlock()
+}
+
+// lagEvery — как часто опрашивать отставание; переменная ради теста.
+var lagEvery = 2 * time.Second
+
+// pollLag опрашивает отставание, пока идёт нагрузка: опросы идут по одному, каждый
+// ограничен lagTimeout. Вывод приходит из песочницы, поэтому принимается только
+// одно конечное число секунд от 0 до maxLag, остальное пропускается.
+func pollLag(ctx context.Context, name string, action func(context.Context, string) (string, error), rec *load.Recorder) {
+	t := time.NewTicker(lagEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		c, cancel := context.WithTimeout(ctx, lagTimeout)
+		out, err := action(c, name)
+		cancel()
+		if lag, ok := parseLag(out); err == nil && ctx.Err() == nil && ok {
+			rec.AddLag(time.Now(), lag)
+		}
+	}
+}
+
+func parseLag(out string) (time.Duration, bool) {
+	v, err := strconv.ParseFloat(strings.TrimSpace(out), 64)
+	if err != nil || math.IsNaN(v) || v < 0 || v > maxLag.Seconds() {
+		return 0, false
+	}
+	return time.Duration(v * float64(time.Second)), true
 }
 
 // watch поднимает алерт по тому, что нагрузка видит снаружи.
@@ -302,11 +346,22 @@ func (l *Lab) watch(now time.Time) {
 func alertReason(a scenario.Alert, samples []load.Sample) string {
 	sent, failed := 0, 0
 	p95 := make([]int, 0, len(samples))
+	var lag []int
 	for _, s := range samples {
 		sent += s.Sent
 		failed += s.Failed
 		if s.Sent > 0 {
 			p95 = append(p95, s.P95Ms)
+		}
+		if s.LagMs != nil {
+			lag = append(lag, *s.LagMs)
+		}
+	}
+	// Отставание проверяется первым: при вставшей фоновой работе запросы могут идти без ошибок.
+	if len(lag) > 0 && a.MaxLag > 0 {
+		sort.Ints(lag)
+		if mid := lag[len(lag)/2]; time.Duration(mid)*time.Millisecond > a.MaxLag {
+			return fmt.Sprintf("АЛЕРТ: отставание %d с за %d с", mid/1000, alertWindow)
 		}
 	}
 	if sent == 0 {
@@ -386,6 +441,9 @@ func (l *Lab) View() View {
 	v := View{ID: l.id, Scenario: l.sc.ID, Title: l.sc.Title, Briefing: l.sc.Briefing, State: l.state,
 		Seed: l.seed, Created: l.created, Events: append([]Event{}, l.events...), Report: l.report,
 		Hints: []Hint{}, HintsAll: len(l.sc.Hints), Alert: l.sc.Alert.Text, FixHow: l.sc.FixHow}
+	if l.sc.Lag != nil {
+		v.LagTitle = l.sc.Lag.Title
+	}
 	for _, h := range l.sc.Hints[:l.hints] {
 		v.Hints = append(v.Hints, Hint{Title: h.Title, Text: h.Text})
 	}

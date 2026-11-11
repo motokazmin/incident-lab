@@ -31,7 +31,7 @@ export class Chart {
   constructor(
     title: string,
     hint: string,
-    private readonly read: (s: Sample) => number,
+    private readonly read: (s: Sample) => number | undefined,
     private readonly format: (v: number) => string,
     private readonly fixedMax?: number,
   ) {
@@ -46,10 +46,12 @@ export class Chart {
   private sx(t: number) { return L + ((t - this.x0) / WINDOW) * (W - L - R); }
   private sy(v: number) { return H - B - (Math.min(v, this.yMax) / this.yMax) * (H - T - B); }
 
-  draw(rows: Sample[], now: number, markers: Marker[]) {
+  /** Секунды без значения (нет запросов, нет замера) на графике пропускаются. */
+  draw(all: Sample[], now: number, markers: Marker[]) {
+    const rows = all.filter((r) => this.read(r) !== undefined);
     this.rows = rows;
     this.x0 = now - WINDOW;
-    const vals = rows.map(this.read);
+    const vals = rows.map((r) => this.read(r)!);
     this.yMax = this.fixedMax ?? niceMax(Math.max(1, ...vals));
     if (rows.length) this.value.textContent = this.format(vals[vals.length - 1]);
 
@@ -76,7 +78,7 @@ export class Chart {
       lab.textContent = text;
       kids.push(lab);
     }
-    const pts = rows.filter((r) => r.t >= this.x0).map((r) => `${this.sx(r.t).toFixed(1)},${this.sy(this.read(r)).toFixed(1)}`);
+    const pts = rows.filter((r) => r.t >= this.x0).map((r) => `${this.sx(r.t).toFixed(1)},${this.sy(this.read(r)!).toFixed(1)}`);
     if (pts.length > 1) kids.push(svg("polyline", { points: pts.join(" "), class: "series" }));
     this.plot.replaceChildren(...kids);
   }
@@ -90,11 +92,11 @@ export class Chart {
     const x = this.sx(row.t);
     this.leave();
     const hair = svg("line", { x1: x, x2: x, y1: T, y2: H - B, class: "hair" });
-    const dot = svg("circle", { cx: x, cy: this.sy(this.read(row)), r: 3.5, class: "dot" });
+    const dot = svg("circle", { cx: x, cy: this.sy(this.read(row)!), r: 3.5, class: "dot" });
     hair.dataset.hover = dot.dataset.hover = "1";
     this.plot.append(hair, dot);
     const time = new Date(row.t * 1000).toLocaleTimeString("ru-RU");
-    this.tip.replaceChildren(h("strong", {}, this.format(this.read(row))), h("span", {}, time));
+    this.tip.replaceChildren(h("strong", {}, this.format(this.read(row)!)), h("span", {}, time));
     this.tip.hidden = false;
     this.tip.style.left = `${Math.min((x / W) * box.width + 8, box.width - 96)}px`;
   }

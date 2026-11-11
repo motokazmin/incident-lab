@@ -85,7 +85,8 @@ class LabScreen {
     h("p", { class: "muted" }, "Застрял? Открывай по одной: от того, куда смотреть, до готовой правки."),
     this.hintList, this.hintBtn, this.hintsDone);
   private readonly errors = new Chart("Ошибки", "Доля запросов клиентов, закончившихся ошибкой", (s) => (s.sent ? (s.failed / s.sent) * 100 : 0), (v) => `${v.toFixed(0)}%`, 100);
-  private readonly latency = new Chart("Время ответа", "95% запросов укладываются в это время (p95)", (s) => s.p95ms, (v) => `${Math.round(v)} мс`);
+  private readonly latency = new Chart("Время ответа", "95% запросов укладываются в это время (p95)", (s) => (s.sent ? s.p95ms : undefined), (v) => `${Math.round(v)} мс`);
+  private lag?: Chart;
   private rows: api.Sample[] = [];
   private last = 0;
   private timer = 0;
@@ -97,6 +98,9 @@ class LabScreen {
 
   async run() {
     const v = await api.getLab(this.id);
+    if (v.lagTitle) {
+      this.lag = new Chart(v.lagTitle, "Сколько ждёт самая старая задача фоновой работы", (s) => (s.lagms === undefined ? undefined : s.lagms / 1000), (x) => `${Math.round(x)} с`);
+    }
     this.side.append(
       this.now, this.report, this.hintBox,
       h("section", {}, h("h2", { class: "section" }, "Задача"), markdown(v.briefing)),
@@ -106,7 +110,7 @@ class LabScreen {
         h("li", {}, "Нажми «Проверить починку» вверху справа."))),
       h("section", { class: "stack" }, h("h2", { class: "section" }, "Состояние сервиса"),
         h("p", { class: "muted" }, "Клиентов имитируем мы: они шлют запросы, пока работает стенд. Графики обновляются каждую секунду."),
-        this.errors.el, this.latency.el),
+        this.errors.el, this.latency.el, ...(this.lag ? [this.lag.el] : [])),
       h("section", {}, h("h2", { class: "section" }, "Журнал"), this.events),
     );
     app.replaceChildren(
@@ -135,6 +139,7 @@ class LabScreen {
       const now = Math.floor(Date.now() / 1000) - 1;
       this.errors.draw(this.rows, now, this.markers);
       this.latency.draw(this.rows, now, this.markers);
+      this.lag?.draw(this.rows, now, this.markers);
     } catch (e) {
       clearInterval(this.timer);
       this.show((e as Error).message);

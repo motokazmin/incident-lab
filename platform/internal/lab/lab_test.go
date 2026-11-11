@@ -429,7 +429,9 @@ func TestDebriefStaysAfterFailedRecheck(t *testing.T) {
 
 func TestAlertReason(t *testing.T) {
 	second := func(sent, failed, p95 int) load.Sample { return load.Sample{Sent: sent, Failed: failed, P95Ms: p95} }
+	lag := func(sent, ms int) load.Sample { return load.Sample{Sent: sent, LagMs: &ms} }
 	both := scenario.Alert{MinErrorRate: 0.2, MaxP95: 500 * time.Millisecond}
+	lagged := scenario.Alert{MinErrorRate: 0.2, MaxLag: 30 * time.Second}
 	for _, c := range []struct {
 		name    string
 		alert   scenario.Alert
@@ -444,6 +446,11 @@ func TestAlertReason(t *testing.T) {
 		{"одна медленная секунда", both, []load.Sample{second(10, 0, 900), second(10, 0, 3), second(10, 0, 3)}, ""},
 		{"порог ошибок выключен", scenario.Alert{MaxP95: time.Second}, []load.Sample{second(10, 10, 3)}, ""},
 		{"порог времени выключен", scenario.Alert{MinErrorRate: 0.2}, []load.Sample{second(10, 0, 9000)}, ""},
+		{"отставание", lagged, []load.Sample{lag(10, 40000), second(10, 0, 3), lag(10, 45000), lag(10, 1000)}, "отставание 40 с"},
+		{"отставание без запросов", lagged, []load.Sample{lag(0, 40000), lag(0, 50000)}, "отставание"},
+		{"одно большое отставание", lagged, []load.Sample{lag(10, 90000), lag(10, 1000), lag(10, 2000)}, ""},
+		{"отставание без замеров", lagged, []load.Sample{second(10, 0, 3)}, ""},
+		{"порог отставания выключен", both, []load.Sample{lag(10, 90000), lag(10, 90000)}, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got := alertReason(c.alert, c.samples)
@@ -451,5 +458,65 @@ func TestAlertReason(t *testing.T) {
 				t.Fatalf("%q, ждали %q", got, c.want)
 			}
 		})
+	}
+}
+
+func TestParseLag(t *testing.T) {
+	for in, want := range map[string]time.Duration{"12": 12 * time.Second, " 0.5\n": 500 * time.Millisecond, "0": 0} {
+		if got, ok := parseLag(in); !ok || got != want {
+			t.Errorf("%q: %v %v", in, got, ok)
+		}
+	}
+	// Вывод из песочницы: всё, кроме одного разумного числа, отбрасывается.
+	for _, in := range []string{"", "abc", "-1", "NaN", "Inf", "1e9", "12 13", "12s"} {
+		if _, ok := parseLag(in); ok {
+			t.Errorf("%q принят", in)
+		}
+	}
+}
+
+// Опрос пишет замеры, пропускает мусор и ошибки и завершается с контекстом: иначе
+// stopLoad перед проверкой починки ждал бы его вечно.
+func TestPollLag(t *testing.T) {
+	old := lagEvery
+	lagEvery = 5 * time.Millisecond
+	t.Cleanup(func() { lagEvery = old })
+	var n atomic.Int32
+	action := func(ctx context.Context, name string) (string, error) {
+		if name != "queue-lag" {
+			t.Errorf("действие %q", name)
+		}
+		switch n.Add(1) % 3 {
+		case 0:
+			return "", errors.New("нет ответа")
+		case 1:
+			return "мусор", nil
+		}
+		return "7", nil
+	}
+	rec := &load.Recorder{}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { pollLag(ctx, "queue-lag", action, rec); close(done) }()
+	for n.Load() < 9 {
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("опрос не остановился")
+	}
+	got := 0
+	for _, s := range rec.Since(0, time.Now().Add(time.Second)) {
+		if s.LagMs != nil {
+			got++
+			if *s.LagMs != 7000 {
+				t.Fatalf("%d", *s.LagMs)
+			}
+		}
+	}
+	if got == 0 {
+		t.Fatal("нет замеров")
 	}
 }

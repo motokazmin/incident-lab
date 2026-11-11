@@ -105,6 +105,7 @@ type Sample struct {
 	Failed int   `json:"failed"`
 	P50Ms  int   `json:"p50ms"`
 	P95Ms  int   `json:"p95ms"`
+	LagMs  *int  `json:"lagms,omitempty"` // пусто — в эту секунду отставание не замеряли
 }
 
 type bucket struct {
@@ -112,6 +113,7 @@ type bucket struct {
 	sent   int
 	failed int
 	lat    []time.Duration
+	lag    *int
 }
 
 // Recorder копит посекундные наблюдения.
@@ -123,7 +125,24 @@ type Recorder struct {
 func (r *Recorder) add(at time.Time, lat time.Duration, ok bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	t := at.Unix()
+	b := r.at(at.Unix())
+	b.sent++
+	if !ok {
+		b.failed++
+	}
+	b.lat = append(b.lat, lat)
+}
+
+// AddLag записывает замер отставания. Запросом он не считается.
+func (r *Recorder) AddLag(at time.Time, lag time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ms := int(lag.Milliseconds())
+	r.at(at.Unix()).lag = &ms
+}
+
+// at возвращает корзину секунды t, создавая её. Вызывается под r.mu.
+func (r *Recorder) at(t int64) *bucket {
 	var b *bucket
 	for i := len(r.buckets) - 1; i >= 0 && i >= len(r.buckets)-5; i-- {
 		if r.buckets[i].t == t {
@@ -139,11 +158,7 @@ func (r *Recorder) add(at time.Time, lat time.Duration, ok bool) {
 			r.buckets = r.buckets[len(r.buckets)-maxBuckets:]
 		}
 	}
-	b.sent++
-	if !ok {
-		b.failed++
-	}
-	b.lat = append(b.lat, lat)
+	return b
 }
 
 // Since возвращает завершённые секунды после t.
@@ -157,7 +172,7 @@ func (r *Recorder) Since(t int64, now time.Time) []Sample {
 		}
 		lat := slices.Clone(b.lat)
 		out = append(out, Sample{T: b.t, Sent: b.sent, Failed: b.failed,
-			P50Ms: int(percentile(lat, 50).Milliseconds()), P95Ms: int(percentile(lat, 95).Milliseconds())})
+			P50Ms: int(percentile(lat, 50).Milliseconds()), P95Ms: int(percentile(lat, 95).Milliseconds()), LagMs: b.lag})
 	}
 	return out
 }
