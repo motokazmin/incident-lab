@@ -361,7 +361,7 @@ func alertReason(a scenario.Alert, samples []load.Sample) string {
 	if len(lag) > 0 && a.MaxLag > 0 {
 		sort.Ints(lag)
 		if mid := lag[len(lag)/2]; time.Duration(mid)*time.Millisecond > a.MaxLag {
-			return fmt.Sprintf("АЛЕРТ: отставание %d с за %d с", mid/1000, alertWindow)
+			return fmt.Sprintf("АЛЕРТ: самая старая задача ждёт %d с", mid/1000)
 		}
 	}
 	if sent == 0 {
