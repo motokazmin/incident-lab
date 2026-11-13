@@ -17,3 +17,4 @@ vmlinux*
 .env.*
 # Claude
 .claude/settings.local.json
+/*.mp4
