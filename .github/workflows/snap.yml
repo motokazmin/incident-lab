@@ -1,0 +1,19 @@
+# Временный: снимки slow-orders для разбора. Удаляется вместе с веткой.
+name: snap
+on:
+  push:
+    branches: [snap-slow-orders]
+jobs:
+  snap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: scripts/build-images.sh slow-orders
+      - run: go test -tags e2e ./platform/internal/lab/ -count=1 -parallel 1 -v -timeout 30m -run '^TestSnapSlowOrders$' 2>&1 | tee snap.log
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: snap
+          path: snap.log
