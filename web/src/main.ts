@@ -13,7 +13,9 @@ const STATE: Record<api.LabView["state"], string> = {
   verifying: "Проверка", resolved: "Инцидент закрыт", ended: "Стенд остановлен",
 };
 
-const retry = (v: api.LabView) => ({ title: "Проверка не пройдена", text: `Что именно не так, написано ниже. ${v.fixHow.join(" ")} Затем запусти проверку снова.` });
+// Проверка ходит и по путям, которых нет в нагрузке: без этой фразы провал при ровном
+// графике читается как ошибка проверки.
+const retry = (v: api.LabView) => ({ title: "Проверка не пройдена", text: `Проверка нагружает сервис иначе, чем клиенты на графике, и может найти то, чего график не показывает. Что осталось, написано ниже. ${v.fixHow.join(" ")} Затем запусти проверку снова.` });
 
 /** Подсказка «что делать сейчас». Единственное место, где описан ход задачи по состояниям. */
 function nowHint(v: api.LabView): { title: string; text: string } {
@@ -159,7 +161,9 @@ class LabScreen {
   }
 
   private render(v: api.LabView) {
-    this.badge.textContent = STATE[v.state];
+    // Инцидент снимает только пройденная проверка: после провала график может быть ровным,
+    // и «Идёт инцидент» читается как ошибка стенда.
+    this.badge.textContent = v.state === "alert" && v.report && !v.report.passed ? "Починка не прошла проверку" : STATE[v.state];
     this.badge.dataset.state = v.state;
     this.verifyBtn.disabled = v.state === "booting" || v.state === "verifying" || v.state === "ended";
     this.verifyBtn.textContent = v.state === "verifying" ? "Проверяем…" : v.state === "resolved" ? "Проверить ещё раз" : "Проверить починку";

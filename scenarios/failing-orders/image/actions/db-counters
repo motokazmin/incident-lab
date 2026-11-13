@@ -1,4 +1,5 @@
 #!/bin/sh
-# Дедлоки, откаты транзакций, время сброса статистики базы shop и обновления строк товаров.
+# Дедлоки, откаты транзакций, время сброса статистики базы shop, обновления строк товаров
+# и сколько соединений с базой shop сейчас заняты работой, кроме этого запроса.
 # -X и pg_catalog: .psqlrc и одноимённое представление в public не подменят ответ.
-psql -X -U postgres -d shop -Atc "SELECT d.deadlocks, d.xact_rollback, coalesce(extract(epoch FROM d.stats_reset)::bigint, 0), t.n_tup_upd FROM pg_catalog.pg_stat_database d, pg_catalog.pg_stat_user_tables t WHERE d.datname = 'shop' AND t.schemaname = 'public' AND t.relname = 'products'"
+psql -X -U postgres -d shop -Atc "SELECT d.deadlocks, d.xact_rollback, coalesce(extract(epoch FROM d.stats_reset)::bigint, 0), t.n_tup_upd, (SELECT count(*) FROM pg_catalog.pg_stat_activity a WHERE a.datname = 'shop' AND a.backend_type = 'client backend' AND a.state <> 'idle' AND a.pid <> pg_catalog.pg_backend_pid()) FROM pg_catalog.pg_stat_database d, pg_catalog.pg_stat_user_tables t WHERE d.datname = 'shop' AND t.schemaname = 'public' AND t.relname = 'products'"

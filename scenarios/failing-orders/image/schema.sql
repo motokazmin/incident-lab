@@ -21,9 +21,17 @@ SELECT o, p, pos, 1, 1000 + p * 10 FROM (
   UNION ALL SELECT i, 7 + i % 93, 3 FROM generate_series(1, 30000) i
 ) t;
 UPDATE orders o SET total = s.t FROM (SELECT order_id, sum(qty * price) t FROM order_items GROUP BY 1) s WHERE s.order_id = o.id;
--- Встречная пара для проверки: те же корзины проверка оформляет и через POST /orders.
-INSERT INTO orders (id, customer_id, total) VALUES (30001, 9001, 0), (30002, 9001, 0);
+-- Встречные заказы для проверки (checks.go, crossCart): покупатель i повторяет заказ 30001+i
+-- клиента 9101+i. У чётных товары 701, 702, 703, у нечётных встречно, четвёртая позиция —
+-- своя, 731+i. Те же корзины проверка оформляет и через POST /orders.
+INSERT INTO orders (id, customer_id, total) SELECT 30001 + i, 9101 + i, 0 FROM generate_series(0, 15) i;
+INSERT INTO order_items (order_id, product_id, position, qty, price)
+SELECT 30001 + i, p, pos, 1, 1000 + p * 10 FROM generate_series(0, 15) i,
+  LATERAL (VALUES (CASE WHEN i % 2 = 0 THEN 701 ELSE 703 END, 1), (702, 2),
+                  (CASE WHEN i % 2 = 0 THEN 703 ELSE 701 END, 3), (731 + i, 4)) v(p, pos);
+-- Повтор с раскупленным товаром последним (checkAtomic): отказ не должен списать остальное.
+INSERT INTO orders (id, customer_id, total) VALUES (30017, 9001, 0);
 INSERT INTO order_items (order_id, product_id, position, qty, price) VALUES
-  (30001, 701, 1, 1, 8010), (30001, 702, 2, 1, 8020), (30001, 703, 3, 1, 8030),
-  (30002, 703, 1, 1, 8030), (30002, 702, 2, 1, 8020), (30002, 701, 3, 1, 8010);
-SELECT setval('orders_id_seq', 30002);
+  (30017, 723, 1, 1, 8230), (30017, 724, 2, 1, 8240), (30017, 199, 3, 1, 2990);
+UPDATE orders o SET total = s.t FROM (SELECT order_id, sum(qty * price) t FROM order_items WHERE order_id > 30000 GROUP BY 1) s WHERE s.order_id = o.id;
+SELECT setval('orders_id_seq', 30017);

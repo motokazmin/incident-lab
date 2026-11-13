@@ -29,31 +29,45 @@ const (
 // после этого срока, иначе хвост прошлой проверки попадёт в эту. Тест укорачивает.
 var statsDelay = 11 * time.Second
 
-// Встречные корзины на товарах, которых нет в нагрузке. Такие же заказы лежат в образе.
-var (
-	cartAB = []line{{701, 1}, {702, 1}, {703, 1}}
-	cartBA = []line{{703, 1}, {702, 1}, {701, 1}}
+// Залп — встречные корзины на товарах, которых нет в нагрузке. У каждого покупателя
+// залпа свой клиент и своя четвёртая позиция: блокировка по клиенту или по составу корзины
+// иначе выстроила бы весь залп в очередь и прошла бы проверку, а в нагрузке клиенты и
+// корзины разные, и дедлоки остаются. Такие же заказы лежат в образе (schema.sql).
+const (
+	crossFirstOrder    = 30001 // заказ из образа покупателя i — crossFirstOrder+i
+	crossFirstCustomer = 9101  // клиент покупателя i — crossFirstCustomer+i
+	crossFirstOwn      = 731   // своя позиция покупателя i — crossFirstOwn+i
+	lineCount          = 4     // позиций в каждом заказе залпа
+	atomicRepeatOrder  = 30017 // заказ из образа с раскупленным товаром последним
 )
 
-const (
-	crossAB   = 30001 // заказ из образа с cartAB
-	crossBA   = 30002 // заказ из образа с cartBA
-	lineCount = 3     // позиций в каждом заказе залпа
-)
+// crossCart — корзина покупателя i: у чётных общие товары по возрастанию, у нечётных
+// встречно, своя позиция последней.
+func crossCart(i int) []line {
+	shared := []line{{701, 1}, {702, 1}, {703, 1}}
+	if i%2 == 1 {
+		slices.Reverse(shared)
+	}
+	return append(shared, line{crossFirstOwn + i, 1})
+}
 
 type line struct{ ProductID, Qty int }
 
-func body(lines []line) string {
+func body(customer int, lines []line) string {
 	parts := make([]string, len(lines))
 	for i, l := range lines {
 		parts[i] = fmt.Sprintf(`{"product_id":%d,"qty":%d}`, l.ProductID, l.Qty)
 	}
-	return fmt.Sprintf(`{"customer_id":%d,"items":[%s]}`, checkCustomer, strings.Join(parts, ","))
+	return fmt.Sprintf(`{"customer_id":%d,"items":[%s]}`, customer, strings.Join(parts, ","))
 }
 
-// create оформляет заказ и возвращает статус и номер заказа.
+// create оформляет заказ клиента проверки и возвращает статус и номер заказа.
 func create(ctx context.Context, env scenario.Env, lines []line) (int, int64, error) {
-	return placed(env.Do(ctx, http.MethodPost, "/orders", body(lines)))
+	return createAs(ctx, env, checkCustomer, lines)
+}
+
+func createAs(ctx context.Context, env scenario.Env, customer int, lines []line) (int, int64, error) {
+	return placed(env.Do(ctx, http.MethodPost, "/orders", body(customer, lines)))
 }
 
 func repeat(ctx context.Context, env scenario.Env, id int64) (int, int64, error) {
@@ -103,9 +117,10 @@ func stocks(ctx context.Context, env scenario.Env, lines []line) ([]int, error) 
 	return out, nil
 }
 
-// counters — признаки в базе: дедлоки, откаты транзакций, время сброса статистики и
-// сколько раз обновлялись строки товаров, включая откаченные попытки.
-type counters struct{ deadlocks, rollbacks, reset, updates int64 }
+// counters — признаки в базе: дедлоки, откаты транзакций, время сброса статистики,
+// сколько раз обновлялись строки товаров, включая откаченные попытки, и сколько
+// соединений ещё заняты работой. busy не счётчик: это снимок в момент чтения.
+type counters struct{ deadlocks, rollbacks, reset, updates, busy int64 }
 
 func dbCounters(ctx context.Context, env scenario.Env) (counters, error) {
 	out, err := env.Action(ctx, "db-counters")
@@ -113,16 +128,16 @@ func dbCounters(ctx context.Context, env scenario.Env) (counters, error) {
 		return counters{}, err
 	}
 	f := strings.Split(strings.TrimSpace(out), "|")
-	if len(f) != 4 {
+	if len(f) != 5 {
 		return counters{}, fmt.Errorf("непонятный ответ базы")
 	}
-	var v [4]int64
+	var v [5]int64
 	for i, s := range f {
 		if v[i], err = strconv.ParseInt(s, 10, 64); err != nil {
 			return counters{}, fmt.Errorf("непонятный ответ базы")
 		}
 	}
-	return counters{v[0], v[1], v[2], v[3]}, nil
+	return counters{v[0], v[1], v[2], v[3], v[4]}, nil
 }
 
 func pause(ctx context.Context, d time.Duration) error {
@@ -134,40 +149,86 @@ func pause(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// settled читает счётчики базы, когда в них попало всё, что было до этого момента.
-func settled(ctx context.Context, env scenario.Env) (counters, error) {
-	if err := pause(ctx, statsDelay); err != nil {
-		return counters{}, err
+// drainLimit — сколько ждать, пока база доделает работу залпа. Обёртка HTTP отвечает
+// клиенту 503 через 1 с, а транзакция идёт дальше: после залпа с ошибками в базе ещё
+// десятки транзакций в очереди к пулу и к строкам товаров. Тест укорачивает.
+var (
+	drainLimit = 30 * time.Second
+	roundDrain = 10 * time.Second // между раундами залпа
+	drainPoll  = 500 * time.Millisecond
+)
+
+// drain ждёт до limit, пока в базе не останется занятых соединений, и возвращает последний
+// снимок счётчиков. idle — база освободилась в срок.
+func drain(ctx context.Context, env scenario.Env, limit time.Duration) (c counters, idle bool, err error) {
+	for wait := time.Duration(0); ; wait += drainPoll {
+		if c, err = dbCounters(ctx, env); err != nil {
+			return counters{}, false, err
+		}
+		if c.busy == 0 || wait >= limit {
+			return c, c.busy == 0, nil
+		}
+		if err = pause(ctx, drainPoll); err != nil {
+			return counters{}, false, err
+		}
 	}
-	return dbCounters(ctx, env)
 }
 
-// checkCrossing залпами оформляет и повторяет заказы с общими товарами во встречном
-// порядке. Повторяет и заказы из образа: правка только в обработчике нового заказа их
-// не выправит. Верная починка не даёт базе дедлоков и не делает работу дважды: номера
-// заказов идут подряд, а строки товаров обновлены ровно по разу на позицию.
-func checkCrossing(ctx context.Context, env scenario.Env) scenario.Result {
-	before, err := settled(ctx, env)
+// settled читает счётчики базы, когда в них попало всё, что было до этого момента:
+// сначала ждёт, пока соединения освободятся, затем — пока придёт их статистика.
+// idle — база освободилась в срок; иначе работа прошлого залпа попадёт в следующий.
+func settled(ctx context.Context, env scenario.Env) (c counters, idle bool, err error) {
+	d, idle, err := drain(ctx, env, drainLimit)
 	if err != nil {
-		return scenario.Result{Detail: "не удалось спросить базу"}
+		return counters{}, false, err
 	}
+	if err = pause(ctx, statsDelay); err != nil {
+		return counters{}, false, err
+	}
+	if c, err = dbCounters(ctx, env); err == nil && !idle {
+		c.busy = d.busy // занятые на конце ожидания: их и называет подсказка
+	}
+	return c, idle, err
+}
+
+// Состав залпа: покупатель i делает kind[i % len(kind)].
+type kind int
+
+const (
+	repeatAB kind = iota
+	repeatBA
+	createAB
+	createBA
+)
+
+var (
+	mixed   = []kind{repeatAB, repeatBA, createAB, createBA}
+	repeats = []kind{repeatAB, repeatBA}
+	creates = []kind{createAB, createBA}
+)
+
+// salvo даёт crossRounds залпов по crossBuyers одновременных заказов и возвращает статусы
+// неудачных и номера оформленных.
+func salvo(ctx context.Context, env scenario.Env, kinds []kind) (map[int]int, []int64) {
 	failed := map[int]int{}
 	var placedIDs []int64
-	for range crossRounds {
+	for round := range crossRounds {
+		// Брошенные клиентом транзакции прошлого раунда доделываются в базе: без ожидания
+		// они копятся от раунда к раунду, и сколько ждать в конце, решает планировщик.
+		if round > 0 {
+			_, _, _ = drain(ctx, env, roundDrain)
+		}
 		codes := make([]int, crossBuyers)
 		got := make([]int64, crossBuyers)
 		var wg sync.WaitGroup
 		for i := range crossBuyers {
 			wg.Go(func() {
-				switch i % 4 {
-				case 0:
-					codes[i], got[i], _ = repeat(ctx, env, crossAB)
-				case 1:
-					codes[i], got[i], _ = repeat(ctx, env, crossBA)
-				case 2:
-					codes[i], got[i], _ = create(ctx, env, cartAB)
-				case 3:
-					codes[i], got[i], _ = create(ctx, env, cartBA)
+				// Чётность i задаёт направление корзины, kinds — путь: AB и BA у обоих путей.
+				switch kinds[i%len(kinds)] {
+				case repeatAB, repeatBA:
+					codes[i], got[i], _ = repeat(ctx, env, int64(crossFirstOrder+i))
+				case createAB, createBA:
+					codes[i], got[i], _ = createAs(ctx, env, crossFirstCustomer+i, crossCart(i))
 				}
 			})
 		}
@@ -180,7 +241,20 @@ func checkCrossing(ctx context.Context, env scenario.Env) scenario.Result {
 			placedIDs = append(placedIDs, got[i])
 		}
 	}
-	after, err := settled(ctx, env)
+	return failed, placedIDs
+}
+
+// checkCrossing залпами оформляет и повторяет заказы с общими товарами во встречном
+// порядке. Повторяет и заказы из образа: правка только в обработчике нового заказа их
+// не выправит. Верная починка не даёт базе дедлоков и не делает работу дважды: номера
+// заказов идут подряд, а строки товаров обновлены ровно по разу на позицию.
+func checkCrossing(ctx context.Context, env scenario.Env) scenario.Result {
+	before, _, err := settled(ctx, env)
+	if err != nil {
+		return scenario.Result{Detail: "не удалось спросить базу"}
+	}
+	failed, placedIDs := salvo(ctx, env, mixed)
+	after, idle, err := settled(ctx, env)
 	if err != nil {
 		return scenario.Result{Detail: "не удалось спросить базу"}
 	}
@@ -192,7 +266,13 @@ func checkCrossing(ctx context.Context, env scenario.Env) scenario.Result {
 	case after.reset != before.reset || dDead < 0 || dRoll < 0 || dUpd < 0:
 		return scenario.Result{Detail: "статистика базы сброшена во время проверки"}
 	case dDead > 0:
-		return scenario.Result{Detail: detail, Hint: hintDeadlock}
+		hint, split := hintDeadlock, ""
+		if idle {
+			hint, split = diagnose(ctx, env, after)
+		} else {
+			split = fmt.Sprintf("; разбивки по путям нет: база не освободилась за %d с, заняты соединений: %d", int(drainLimit.Seconds()), after.busy)
+		}
+		return scenario.Result{Detail: detail + split, Hint: hint}
 	case len(slices.Compact(slices.Clone(placedIDs))) != len(placedIDs):
 		return scenario.Result{Detail: detail + ", один номер заказа выдан дважды"}
 	case sum(failed) > 0 && dRoll > 0:
@@ -206,6 +286,83 @@ func checkCrossing(ctx context.Context, env scenario.Env) scenario.Result {
 		return scenario.Result{Detail: detail, Hint: hintRollback}
 	}
 	return scenario.Result{Pass: true, Detail: detail}
+}
+
+// probeBudget — сколько времени должно остаться на диагностику: два залпа и две паузы
+// статистики. Не хватает — подсказка прежняя, без разбивки по путям.
+var probeBudget = 50 * time.Second
+
+// diagnose разбивает смешанный залп на пути: только повторы, затем только новые заказы.
+// Нагрузка на графике шлёт одни повторы, поэтому правка одного пути успокаивает график,
+// а смешанный залп падает. Подсказка говорит, что увидела база, а не что сделал дежурный.
+// Любой сбой диагностики оставляет прежнюю подсказку.
+func diagnose(ctx context.Context, env scenario.Env, from counters) (string, string) {
+	if dl, ok := ctx.Deadline(); ok && time.Until(dl) < probeBudget {
+		return hintDeadlock, ""
+	}
+	r, mid, ok := probePath(ctx, env, from, repeats)
+	if !ok {
+		return hintDeadlock, ""
+	}
+	c, _, ok := probePath(ctx, env, mid, creates)
+	if !ok {
+		return hintDeadlock, ""
+	}
+	split := fmt.Sprintf("; по отдельности: в повторах %s, в новых заказах %s", r, c)
+	switch {
+	case r.clean && c.clean:
+		return hintCrossPaths, split
+	case r.clean && c.deadlocks > 0:
+		return hintCreatesCross, split
+	case c.clean && r.deadlocks > 0:
+		return hintRepeatsCross, split
+	}
+	return hintDeadlock, split
+}
+
+// probe — залп по одному пути. clean — путь прошёл все признаки смешанного залпа:
+// все заказы оформлены, номера подряд, строки товаров обновлены по разу, дедлоков нет.
+// Ноль дедлоков у пути, который отвечает ошибкой или заглушкой, — не чистый путь.
+type probe struct {
+	deadlocks int64
+	clean     bool
+	why       string // почему путь не чист, кроме дедлоков
+}
+
+func (p probe) String() string {
+	s := fmt.Sprintf("дедлоков %d", p.deadlocks)
+	if p.why != "" {
+		s += " (" + p.why + ")"
+	}
+	return s
+}
+
+func probePath(ctx context.Context, env scenario.Env, before counters, kinds []kind) (probe, counters, bool) {
+	failed, ids := salvo(ctx, env, kinds)
+	after, idle, err := settled(ctx, env)
+	if err != nil || !idle {
+		return probe{}, after, false
+	}
+	dDead, dUpd := after.deadlocks-before.deadlocks, after.updates-before.updates
+	if after.reset != before.reset || dDead < 0 || dUpd < 0 || after.rollbacks < before.rollbacks {
+		return probe{}, after, false
+	}
+	n := int64(len(ids))
+	slices.Sort(ids)
+	why := ""
+	switch {
+	case sum(failed) > 0:
+		why = "статусы " + codesText(failed)
+	case n != crossRounds*crossBuyers:
+		why = fmt.Sprintf("оформлено %d", n)
+	case len(slices.Compact(slices.Clone(ids))) != len(ids):
+		why = "номер заказа выдан дважды"
+	case ids[n-1]-ids[0]+1 != n:
+		why = "номера с пропусками"
+	case dUpd != n*lineCount:
+		why = fmt.Sprintf("обновлений товаров %d на %d позиций", dUpd, n*lineCount)
+	}
+	return probe{dDead, dDead == 0 && why == "", why}, after, true
 }
 
 func sum(m map[int]int) int {
@@ -314,7 +471,24 @@ func checkAtomic(ctx context.Context, env scenario.Env) scenario.Result {
 	if !slices.Equal(before, after) {
 		return scenario.Result{Detail: fmt.Sprintf("заказ отклонён, но остатки %v → %v", before, after)}
 	}
-	return scenario.Result{Pass: true, Detail: "отказ 409, остатки не тронуты"}
+	// Повтор идёт своим путём: починка может вынести его из транзакции.
+	again := []line{{723, 1}, {724, 1}}
+	before, err = stocks(ctx, env, again)
+	if err != nil {
+		return scenario.Result{Detail: err.Error()}
+	}
+	st, _, err = repeat(ctx, env, atomicRepeatOrder)
+	if err != nil || st != http.StatusConflict {
+		return scenario.Result{Detail: fmt.Sprintf("повтор заказа с раскупленным товаром: статус %d вместо 409, %v", st, err)}
+	}
+	after, err = stocks(ctx, env, again)
+	if err != nil {
+		return scenario.Result{Detail: err.Error()}
+	}
+	if !slices.Equal(before, after) {
+		return scenario.Result{Detail: fmt.Sprintf("повтор отклонён, но остатки %v → %v", before, after)}
+	}
+	return scenario.Result{Pass: true, Detail: "отказ 409 на заказ и на повтор, остатки не тронуты"}
 }
 
 // checkLastUnit разыгрывает гонку: остаток 1 читают все, а получает один. В заказе один
