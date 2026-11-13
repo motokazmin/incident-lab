@@ -20,7 +20,10 @@ type fakeEnv struct {
 	repeatStatus int   // если задан, ответ повторам вместо status
 	idStep       int64 // шаг номеров заказов: 1 — подряд, 0 — один номер всем
 	phases       []phase
-	busyAfter    int // после этого залпа (с 1) база не освобождается; 0 — освобождается всегда
+	busyAfter    int           // после этого залпа (с 1) база не освобождается; 0 — освобождается всегда
+	busyAlways   bool          // база не освобождается никогда: зависшие транзакции держат соединения
+	actionDelay  time.Duration // сколько идёт запрос счётчиков: на стенде это psql в госте
+	doDelay      time.Duration // сколько идёт ответ сервиса: на стенде до 1 с при сбое
 	requests     atomic.Int64
 	lastID       atomic.Int64
 }
@@ -32,6 +35,7 @@ type phase struct {
 }
 
 func (e *fakeEnv) Do(_ context.Context, _, path, _ string) (int, []byte, error) {
+	time.Sleep(e.doDelay)
 	e.requests.Add(1)
 	id := e.lastID.Add(e.idStep)
 	st := e.status
@@ -49,9 +53,10 @@ func (e *fakeEnv) Action(_ context.Context, name string) (string, error) {
 	if name != "db-counters" {
 		return "", fmt.Errorf("нет действия %s", name)
 	}
+	time.Sleep(e.actionDelay)
 	done := int(e.requests.Load() / (crossRounds * crossBuyers))
 	busy := 0
-	if e.busyAfter > 0 && done == e.busyAfter {
+	if e.busyAlways || e.busyAfter > 0 && done == e.busyAfter {
 		busy = 2
 	}
 	dead, roll, reset, upd := int64(10), int64(20), int64(100), int64(1000)
@@ -185,6 +190,42 @@ func TestCrossingNoTimeForSplit(t *testing.T) {
 	res := checkCrossing(ctx, env)
 	if res.Hint != hintDeadlock || env.requests.Load() != crossRounds*crossBuyers || strings.Contains(res.Detail, "по отдельности") {
 		t.Fatalf("%+v, запросов %d", res, env.requests.Load())
+	}
+}
+
+// База так и не освободилась (deadlock_timeout на час, повтор при дедлоке): ожидания между
+// раундами и после залпа не должны съесть бюджет проверки, иначе итоговый замер не успеет,
+// и дежурный получит «не удалось спросить базу» без подсказки. 13.11 так падали три случая e2e.
+func TestCrossingBusyFitsBudget(t *testing.T) {
+	statsDelay, drainLimit, roundDrain, drainPoll, roundSlack = time.Millisecond, 60*time.Millisecond, 30*time.Millisecond, time.Millisecond, 10*time.Millisecond
+	// Без учёта бюджета ожидания занимают 60 + 9×30 + 60 = 390 мс.
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	res := checkCrossing(ctx, &fakeEnv{status: http.StatusServiceUnavailable, busyAlways: true, phases: one(phase{})})
+	if res.Hint != hintStuck {
+		t.Fatalf("%+v", res)
+	}
+	// Раунды идут дольше заложенного на них запаса: итоговое ожидание всё равно укладывается.
+	ctx, cancel = context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	res = checkCrossing(ctx, &fakeEnv{status: http.StatusServiceUnavailable, busyAlways: true, doDelay: 15 * time.Millisecond, phases: one(phase{})})
+	if res.Hint != hintStuck {
+		t.Fatalf("медленные раунды: %+v", res)
+	}
+}
+
+// Ожидание считается по часам: опрос сам занимает время, и счёт по числу опросов
+// растягивал 30 с ожидания на стенде за пределы бюджета проверки.
+func TestDrainWallClock(t *testing.T) {
+	drainPoll = time.Millisecond
+	env := &fakeEnv{busyAlways: true, actionDelay: 10 * time.Millisecond}
+	start := time.Now()
+	if _, idle, err := drain(context.Background(), env, 50*time.Millisecond); err != nil || idle {
+		t.Fatalf("idle %v, %v", idle, err)
+	}
+	// По числу опросов вышло бы 50 опросов по 11 мс — больше полсекунды.
+	if d := time.Since(start); d > 150*time.Millisecond {
+		t.Fatalf("ждали %v вместо 50 мс", d)
 	}
 }
 

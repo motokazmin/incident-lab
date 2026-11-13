@@ -156,16 +156,27 @@ var (
 	drainLimit = 30 * time.Second
 	roundDrain = 10 * time.Second // между раундами залпа
 	drainPoll  = 500 * time.Millisecond
+	roundSlack = 2 * time.Second // на один оставшийся раунд залпа: ответы приходят за 1 с
 )
+
+// left — сколько осталось до конца бюджета проверки; без срока — сколько угодно.
+func left(ctx context.Context) time.Duration {
+	if dl, ok := ctx.Deadline(); ok {
+		return time.Until(dl)
+	}
+	return time.Duration(1<<62 - 1)
+}
 
 // drain ждёт до limit, пока в базе не останется занятых соединений, и возвращает последний
 // снимок счётчиков. idle — база освободилась в срок.
 func drain(ctx context.Context, env scenario.Env, limit time.Duration) (c counters, idle bool, err error) {
-	for wait := time.Duration(0); ; wait += drainPoll {
+	// Срок по часам, а не по числу опросов: опрос через psql в госте сам занимает время.
+	until := time.Now().Add(limit)
+	for {
 		if c, err = dbCounters(ctx, env); err != nil {
 			return counters{}, false, err
 		}
-		if c.busy == 0 || wait >= limit {
+		if c.busy == 0 || !time.Now().Before(until) {
 			return c, c.busy == 0, nil
 		}
 		if err = pause(ctx, drainPoll); err != nil {
@@ -177,8 +188,11 @@ func drain(ctx context.Context, env scenario.Env, limit time.Duration) (c counte
 // settled читает счётчики базы, когда в них попало всё, что было до этого момента:
 // сначала ждёт, пока соединения освободятся, затем — пока придёт их статистика.
 // idle — база освободилась в срок; иначе работа прошлого залпа попадёт в следующий.
+//
+// Ожидание не длиннее, чем оставляет бюджет проверки за вычетом паузы статистики: если
+// база так и не освободилась, замер всё равно состоится, а не упрётся в конец бюджета.
 func settled(ctx context.Context, env scenario.Env) (c counters, idle bool, err error) {
-	d, idle, err := drain(ctx, env, drainLimit)
+	d, idle, err := drain(ctx, env, min(drainLimit, left(ctx)-statsDelay-roundSlack))
 	if err != nil {
 		return counters{}, false, err
 	}
@@ -215,8 +229,11 @@ func salvo(ctx context.Context, env scenario.Env, kinds []kind) (map[int]int, []
 	for round := range crossRounds {
 		// Брошенные клиентом транзакции прошлого раунда доделываются в базе: без ожидания
 		// они копятся от раунда к раунду, и сколько ждать в конце, решает планировщик.
+		// Ждём не дольше, чем оставляет бюджет: оставшимся раундам и итоговому замеру
+		// времени должно хватить и тогда, когда база не освобождается вовсе.
 		if round > 0 {
-			_, _, _ = drain(ctx, env, roundDrain)
+			reserve := drainLimit + statsDelay + time.Duration(crossRounds-round+1)*roundSlack
+			_, _, _ = drain(ctx, env, min(roundDrain, left(ctx)-reserve))
 		}
 		codes := make([]int, crossBuyers)
 		got := make([]int64, crossBuyers)

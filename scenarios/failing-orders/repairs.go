@@ -113,8 +113,9 @@ var repairs = []scenario.Repair{
 	// Короткая транзакция реже сводит пути: подсказка всё равно должна назвать новые заказы.
 	{Name: "сортировка в repeatOrder и индекс под скидку", Shell: indexes + " && svc deploy", FailAt: "общими товарами", Hint: hintCreatesCross, Edits: []scenario.Edit{
 		withSlices, {File: "orders.go", From: repeatP, To: sortCopy + repeatP}}},
-	// Повторы при дедлоке долго доделываются в базе: разбивке нужно дождаться их.
-	{Name: "сортировка в repeatOrder и повтор при дедлоке", Shell: "svc deploy", FailAt: "общими товарами", Hint: hintCreatesCross, Edits: []scenario.Edit{
+	// Повторы при дедлоке крутятся в базе и после ответа клиенту: база не освобождается
+	// в бюджет проверки, разбивки по путям нет, подсказка общая — про дедлоки.
+	{Name: "сортировка в repeatOrder и повтор при дедлоке", Shell: "svc deploy", FailAt: "общими товарами", Hint: "находит дедлоки", Edits: []scenario.Edit{
 		withSlices, withStrings, {File: "orders.go", From: repeatP, To: sortCopy + repeatP},
 		{File: "orders.go", From: place, To: retry(`"deadlock"`)}}},
 	// Случай 12.11 как у пользователя: починка под распродажей, перед проверкой хвост в базе.
