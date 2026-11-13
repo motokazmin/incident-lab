@@ -107,9 +107,11 @@ func loadDigest(l *lab.Lab) string {
 }
 
 // shell выполняет команду в терминале стенда и возвращает весь вывод с эхом.
+// Ожидание с запасом на железо: индекс под пиком slow-orders строится 22–37 с на замеренных
+// раннерах и растёт с ценой прохода, на медленном процессоре оценка около 40 с.
 func shell(t *testing.T, l *lab.Lab, cmd string) string {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	c, err := l.Terminal(ctx)
 	if err != nil {

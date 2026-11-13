@@ -72,3 +72,21 @@ func TestProbesCoverRanges(t *testing.T) {
 		t.Fatalf("обошли %d покупателей", len(seen))
 	}
 }
+
+// «С запасом» в проверке — не меньше четверти сверх пика по самому тяжёлому запросу.
+func TestSurgeExceedsPeak(t *testing.T) {
+	lists := func(p scenario.LoadProfile) float64 {
+		var all, l int
+		for _, r := range p.Requests {
+			all += r.Weight
+			if r.Path == "/customers/{id}/orders" {
+				l += r.Weight
+			}
+		}
+		return float64(p.RatePerSec) * float64(l) / float64(all)
+	}
+	peak, surge := lists(New().Rise.Load), lists(surgeLoad())
+	if surge < 1.25*peak {
+		t.Fatalf("списков в проверке %.1f/с, в пике %.1f/с: запас меньше 1,25", surge, peak)
+	}
+}
