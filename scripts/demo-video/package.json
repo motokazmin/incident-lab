@@ -1,0 +1,12 @@
+{
+  "name": "incident-lab-demo-video",
+  "private": true,
+  "type": "module",
+  "description": "Немой черновик демонстрации стенда: браузер под скриптом, запись экрана, склейка ffmpeg",
+  "scripts": {
+    "record": "node record.mjs"
+  },
+  "dependencies": {
+    "puppeteer-core": "25.14.0"
+  }
+}
