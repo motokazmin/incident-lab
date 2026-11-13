@@ -67,7 +67,7 @@ func New() scenario.Scenario {
 		Repairs:   repairs,
 		Reference: reference,
 		Checks: []scenario.Check{
-			{Name: "Сервис держит тройную нагрузку", Run: checkSurge},
+			{Name: "Сервис держит шестикратную нагрузку", Run: checkSurge},
 			{Name: "Заказы списывают остаток, а проданный товар не продаётся", Run: checkOrders},
 			{Name: "Последний товар достаётся одному покупателю", Run: checkLastUnit},
 			{Name: "Нет зависших транзакций", Run: checkNoLeak},
