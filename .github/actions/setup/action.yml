@@ -3,6 +3,10 @@ description: KVM для пользователя раннера, Go, Firecracker
 runs:
   using: composite
   steps:
+    # Цена работы в госте зависит от процессора раннера: без модели в логе провал по времени не разобрать.
+    - name: Процессор раннера
+      shell: bash
+      run: lscpu | grep -E '^(Model name|CPU\(s\)):'
     # На раннерах /dev/kvm принадлежит root: открываем его пользователю runner.
     - name: Доступ к KVM
       shell: bash

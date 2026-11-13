@@ -22,8 +22,8 @@ var hintsText string
 
 const (
 	quietRate = 10
-	peakRate  = 30
-	surgeRate = 45
+	peakRate  = 70 // без индекса спрос на CPU в 1,3 раза больше двух ядер даже на самом быстром раннере CI (проход 0,09 с): алерт держится на нехватке процессора, а не на пороге
+	surgeRate = 90 // списков в 1,17 раза больше, чем в пике: «с запасом»
 	rareRate  = 35
 
 	quietTime = 60 * time.Second
