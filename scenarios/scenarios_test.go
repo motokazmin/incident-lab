@@ -3,6 +3,7 @@ package scenarios
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -51,12 +52,22 @@ func checkActions(t *testing.T, id string) {
 	}
 }
 
+// actionName — имена, которые агент исполняет (actionName в platform/cmd/labagent).
+var actionName = regexp.MustCompile(`^[a-z0-9-]+$`)
+
 // Действие, которое зовёт каркас, лежит у сюжета или в каркасе: опечатка иначе молча
 // оставила бы график пустым, а алерт — без замеров.
 func checkAction(t *testing.T, id, name string) {
 	t.Helper()
+	// Агент отвечает «bad action» на имя вне этого набора, а опрос молча пропускает ошибки.
+	if !actionName.MatchString(name) {
+		t.Errorf("имя действия %q: агент примет только %s", name, actionName)
+	}
 	for _, dir := range []string{filepath.Join(id, "image/actions"), "../platform/guest/actions"} {
-		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+		if st, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			if st.Mode()&0o111 == 0 {
+				t.Errorf("действие %s не исполняемое", name)
+			}
 			return
 		}
 	}

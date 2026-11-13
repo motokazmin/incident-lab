@@ -447,7 +447,9 @@ func TestAlertReason(t *testing.T) {
 		{"порог ошибок выключен", scenario.Alert{MaxP95: time.Second}, []load.Sample{second(10, 10, 3)}, ""},
 		{"порог времени выключен", scenario.Alert{MinErrorRate: 0.2}, []load.Sample{second(10, 0, 9000)}, ""},
 		{"отставание", lagged, []load.Sample{lag(10, 40000), second(10, 0, 3), lag(10, 45000), lag(10, 1000)}, "ждёт 40 с"},
-		{"отставание без запросов", lagged, []load.Sample{lag(0, 40000), lag(0, 50000)}, "ждёт"},
+		{"отставание без запросов", lagged, []load.Sample{lag(0, 40000), lag(0, 50000), lag(0, 45000)}, "ждёт"},
+		{"мало замеров отставания", lagged, []load.Sample{lag(10, 90000), lag(10, 90000)}, ""},
+		{"чётное число замеров, выброс сверху", lagged, []load.Sample{lag(10, 1000), lag(10, 2000), lag(10, 40000), lag(10, 90000)}, ""},
 		{"одно большое отставание", lagged, []load.Sample{lag(10, 90000), lag(10, 1000), lag(10, 2000)}, ""},
 		{"отставание без замеров", lagged, []load.Sample{second(10, 0, 3)}, ""},
 		{"порог отставания выключен", both, []load.Sample{lag(10, 90000), lag(10, 90000)}, ""},
@@ -478,9 +480,6 @@ func TestParseLag(t *testing.T) {
 // Опрос пишет замеры, пропускает мусор и ошибки и завершается с контекстом: иначе
 // stopLoad перед проверкой починки ждал бы его вечно.
 func TestPollLag(t *testing.T) {
-	old := lagEvery
-	lagEvery = 5 * time.Millisecond
-	t.Cleanup(func() { lagEvery = old })
 	var n atomic.Int32
 	action := func(ctx context.Context, name string) (string, error) {
 		if name != "queue-lag" {
@@ -497,7 +496,7 @@ func TestPollLag(t *testing.T) {
 	rec := &load.Recorder{}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	go func() { pollLag(ctx, "queue-lag", action, rec); close(done) }()
+	go func() { pollLag(ctx, 5*time.Millisecond, "queue-lag", action, rec); close(done) }()
 	for n.Load() < 9 {
 		time.Sleep(time.Millisecond)
 	}

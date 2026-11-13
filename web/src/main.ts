@@ -84,7 +84,7 @@ class LabScreen {
     h("h2", { class: "section" }, "Подсказки"),
     h("p", { class: "muted" }, "Застрял? Открывай по одной: от того, куда смотреть, до готовой правки."),
     this.hintList, this.hintBtn, this.hintsDone);
-  private readonly errors = new Chart("Ошибки", "Доля запросов клиентов, закончившихся ошибкой", (s) => (s.sent ? (s.failed / s.sent) * 100 : 0), (v) => `${v.toFixed(0)}%`, 100);
+  private readonly errors = new Chart("Ошибки", "Доля запросов клиентов, закончившихся ошибкой", (s) => (s.sent ? (s.failed / s.sent) * 100 : undefined), (v) => `${v.toFixed(0)}%`, 100);
   private readonly latency = new Chart("Время ответа", "95% запросов укладываются в это время (p95)", (s) => (s.sent ? s.p95ms : undefined), (v) => `${Math.round(v)} мс`);
   private lag?: Chart;
   private rows: api.Sample[] = [];

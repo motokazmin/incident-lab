@@ -2,20 +2,31 @@
 # Сколько секунд ждёт письма самый старый заказ: заказы из базы против журнала почтового
 # шлюза, а не таблицы jobs — её меняет учебный код. Номер этого заказа запоминается, чтобы
 # следующий опрос не перебирал отправленные. Заказы истории (до 30000) в счёт не идут.
+# Заказы листаются страницами: после поздней починки хвост разбирается по порядку, и первая
+# страница может быть отправлена целиком, пока дальше письма ещё ждут.
 set -e
 mark=/run/lab-mail-oldest
+page=5000
 from=$(cat "$mark" 2>/dev/null || true)
 case $from in ''|*[!0-9]*) from=30001 ;; esac
-rows=$(psql -X -At -F ' ' -U postgres -d shop -c "SELECT id, extract(epoch FROM created_at) FROM public.orders WHERE id >= $from ORDER BY id LIMIT 5000")
-out=$(printf '%s\n' "$rows" | curl -fsS --data-binary @- http://127.0.0.1:9025/oldest-unsent)
-if [ -n "$out" ]; then
-  # Запас на заказы с меньшим номером, которые ещё не были закоммичены во время запроса.
-  found=${out%% *}
-  case $found in ''|*[!0-9]*) ;; *) [ "$((found - 1000))" -gt "$from" ] && echo $((found - 1000)) > "$mark" ;; esac
-  echo "${out#* }"
-  exit 0
-fi
-# Все отправлены: сдвигаем отметку с запасом на заказы, которые ещё не закоммичены.
-last=$(printf '%s\n' "$rows" | tail -n 1 | cut -d ' ' -f 1)
-case $last in ''|*[!0-9]*) ;; *) [ "$last" -gt $((from + 1000)) ] && echo $((last - 1000)) > "$mark" ;; esac
+start=$from
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  rows=$(psql -X -At -F ' ' -U postgres -d shop -c "SELECT id, extract(epoch FROM created_at) FROM public.orders WHERE id >= $from ORDER BY id LIMIT $page")
+  [ -n "$rows" ] || break
+  out=$(printf '%s\n' "$rows" | curl -fsS --data-binary @- http://127.0.0.1:9025/oldest-unsent)
+  if [ -n "$out" ]; then
+    # Запас на заказы с меньшим номером, которые ещё не были закоммичены во время запроса.
+    found=${out%% *}
+    case $found in ''|*[!0-9]*) ;; *) [ "$((found - 1000))" -gt "$start" ] && echo $((found - 1000)) > "$mark" ;; esac
+    echo "${out#* }"
+    exit 0
+  fi
+  last=$(printf '%s\n' "$rows" | tail -n 1 | cut -d ' ' -f 1)
+  case $last in ''|*[!0-9]*) break ;; esac
+  # Неполная страница — заказов дальше нет.
+  [ "$(printf '%s\n' "$rows" | grep -c .)" -ge "$page" ] || break
+  from=$((last + 1))
+done
+# Все просмотренные отправлены: сдвигаем отметку с запасом на заказы, которые ещё не закоммичены.
+case $last in ''|*[!0-9]*) ;; *) [ "$last" -gt $((start + 1000)) ] && echo $((last - 1000)) > "$mark" ;; esac
 echo 0

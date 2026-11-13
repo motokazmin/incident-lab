@@ -284,7 +284,7 @@ func (l *Lab) startLoad(ctx context.Context, seed uint64, quiet bool) {
 	go func() {
 		defer close(lagDone)
 		if l.sc.Lag != nil {
-			pollLag(ctx, l.sc.Lag.Action, l.api.Action, l.rec)
+			pollLag(ctx, lagEvery, l.sc.Lag.Action, l.api.Action, l.rec)
 		}
 	}()
 	l.mu.Lock()
@@ -292,14 +292,18 @@ func (l *Lab) startLoad(ctx context.Context, seed uint64, quiet bool) {
 	l.mu.Unlock()
 }
 
-// lagEvery — как часто опрашивать отставание; переменная ради теста.
-var lagEvery = 2 * time.Second
+// lagEvery — как часто опрашивать отставание.
+const lagEvery = 2 * time.Second
+
+// minLagSamples — сколько замеров отставания нужно в окне алерта: при одном-двух
+// медиана — это и есть выброс.
+const minLagSamples = 3
 
 // pollLag опрашивает отставание, пока идёт нагрузка: опросы идут по одному, каждый
 // ограничен lagTimeout. Вывод приходит из песочницы, поэтому принимается только
 // одно конечное число секунд от 0 до maxLag, остальное пропускается.
-func pollLag(ctx context.Context, name string, action func(context.Context, string) (string, error), rec *load.Recorder) {
-	t := time.NewTicker(lagEvery)
+func pollLag(ctx context.Context, every time.Duration, name string, action func(context.Context, string) (string, error), rec *load.Recorder) {
+	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
 		select {
@@ -307,11 +311,13 @@ func pollLag(ctx context.Context, name string, action func(context.Context, stri
 			return
 		case <-t.C:
 		}
+		// Замер относится к началу опроса: действие может идти до lagTimeout.
+		at := time.Now()
 		c, cancel := context.WithTimeout(ctx, lagTimeout)
 		out, err := action(c, name)
 		cancel()
 		if lag, ok := parseLag(out); err == nil && ctx.Err() == nil && ok {
-			rec.AddLag(time.Now(), lag)
+			rec.AddLag(at, lag)
 		}
 	}
 }
@@ -358,9 +364,10 @@ func alertReason(a scenario.Alert, samples []load.Sample) string {
 		}
 	}
 	// Отставание проверяется первым: при вставшей фоновой работе запросы могут идти без ошибок.
-	if len(lag) > 0 && a.MaxLag > 0 {
+	// Нижняя медиана: при чётном числе замеров один выброс сверху не решает.
+	if len(lag) >= minLagSamples && a.MaxLag > 0 {
 		sort.Ints(lag)
-		if mid := lag[len(lag)/2]; time.Duration(mid)*time.Millisecond > a.MaxLag {
+		if mid := lag[(len(lag)-1)/2]; time.Duration(mid)*time.Millisecond > a.MaxLag {
 			return fmt.Sprintf("АЛЕРТ: самая старая задача ждёт %d с", mid/1000)
 		}
 	}

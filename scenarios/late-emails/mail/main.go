@@ -116,10 +116,13 @@ func (g *gateway) stats(w http.ResponseWriter, _ *http.Request) {
 // oldestUnsent получает строки «заказ время-создания-в-секундах» по возрастанию номера и
 // печатает первый заказ без письма и его возраст в секундах; пусто — все отправлены.
 func (g *gateway) oldestUnsent(w http.ResponseWriter, r *http.Request) {
+	// Тело читается до блокировки: пока оно идёт по сети, отправки писем не ждут.
+	type order struct {
+		id int64
+		at float64
+	}
+	var orders []order
 	sc := bufio.NewScanner(http.MaxBytesReader(w, r.Body, maxBody))
-	now := float64(time.Now().UnixMilli()) / 1000
-	g.mu.Lock()
-	defer g.mu.Unlock()
 	for sc.Scan() {
 		fields := strings.Fields(sc.Text())
 		if len(fields) != 2 {
@@ -130,8 +133,14 @@ func (g *gateway) oldestUnsent(w http.ResponseWriter, r *http.Request) {
 		if err1 != nil || err2 != nil {
 			continue
 		}
-		if g.sent[id] == 0 {
-			fmt.Fprintf(w, "%d %.1f\n", id, max(now-at, 0))
+		orders = append(orders, order{id, at})
+	}
+	now := float64(time.Now().UnixMilli()) / 1000
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	for _, o := range orders {
+		if g.sent[o.id] == 0 {
+			fmt.Fprintf(w, "%d %.1f\n", o.id, max(now-o.at, 0))
 			return
 		}
 	}
